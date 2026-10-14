@@ -23,6 +23,7 @@ COLOR_SPAWNER = (46, 204, 113)
 COLOR_DESPAWNER = (231, 76, 60)
 COLOR_PUMP = (155, 89, 182)
 COLOR_ACTIVE_PUMP = (241, 196, 15)
+COLOR_SOLID_WALL = (70, 70, 80)  # 완전한 벽 색상 (진한 회색)
 
 # 물질별 색상 구분
 COLOR_SODIUM = (241, 196, 15)  # 나트륨 (노란색)
@@ -53,7 +54,7 @@ DIRECTION_LABELS = {
 # 방향 정보가 없는 능동수송 펌프의 기본 방향
 DEFAULT_ACTIVE_PUMP_DIRECTION = "right"
 
-# 벽을 통과할 확률
+# 벽을 통과할 확률 (타일 1: 세포막)
 CELL_PASS_PROBABILITY = 0.2
 
 # 생성 주기
@@ -79,7 +80,6 @@ class ActivePump:
         self.x = x
         self.y = y
         self.direction = direction
-
         self.dx, self.dy = DIRECTION_MAP[direction]
 
 
@@ -93,14 +93,6 @@ def in_bounds(x, y):
 
 
 def load_map_from_json():
-    """
-    맵 에디터에서 저장한 map.json을 읽는다.
-
-    반환:
-        grid: grid[x][y] 형태의 맵
-        active_pump_settings: 능동수송 펌프 설정 목록
-    """
-
     path = Path(__file__).resolve().parent / "map.json"
 
     if not path.exists():
@@ -127,13 +119,13 @@ def load_map_from_json():
             print("map.json의 grid 데이터 형식이 잘못되었습니다.")
             return None, []
 
-        # 타일 값 검증
+        # 타일 값 검증 (0 ~ 6 허용)
         for x in range(COLS):
             for y in range(ROWS):
                 if (
                     not isinstance(grid[x][y], int)
                     or isinstance(grid[x][y], bool)
-                    or grid[x][y] not in range(6)
+                    or grid[x][y] not in range(7)
                 ):
                     print(f"잘못된 타일 값: ({x}, {y}) = {grid[x][y]}")
                     return None, []
@@ -145,7 +137,6 @@ def load_map_from_json():
             return None, []
 
         print(f"맵 로드 완료: {path.name}")
-
         return grid, settings
 
     except (OSError, json.JSONDecodeError) as exc:
@@ -158,12 +149,6 @@ def load_map_from_json():
 
 
 def load_active_pumps(grid, settings):
-    """
-    JSON 설정을 검증하고 능동수송 펌프를 생성한다.
-
-    JSON에 방향이 없는 펌프는 오른쪽을 기본 방향으로 사용한다.
-    """
-
     directions_by_position = {}
 
     for item in settings:
@@ -178,31 +163,24 @@ def load_active_pumps(grid, settings):
                 or not isinstance(y, int)
                 or isinstance(y, bool)
             ):
-                print(f"펌프 좌표가 정수가 아닙니다: {item}")
                 continue
 
             if not in_bounds(x, y):
-                print(f"펌프 좌표가 범위를 벗어났습니다: {item}")
                 continue
 
             if grid[x][y] != 5:
-                print(f"({x}, {y}) 위치는 능동수송 펌프(5)가 아닙니다.")
                 continue
 
             if not isinstance(direction, str):
-                print(f"펌프 방향이 문자열이 아닙니다: {item}")
                 continue
 
             direction = direction.lower()
-
             if direction not in DIRECTION_MAP:
-                print(f"잘못된 펌프 방향: {item}")
                 continue
 
             directions_by_position[(x, y)] = direction
-
         except (KeyError, TypeError):
-            print(f"잘못된 펌프 설정: {item}")
+            pass
 
     active_pumps = []
 
@@ -215,19 +193,10 @@ def load_active_pumps(grid, settings):
                 (x, y),
                 DEFAULT_ACTIVE_PUMP_DIRECTION,
             )
-
-            if (x, y) not in directions_by_position:
-                print(
-                    f"펌프 ({x}, {y})의 방향 정보가 없어 "
-                    f"{DIRECTION_LABELS[direction]}을 기본 방향으로 사용합니다."
-                )
-
             active_pumps.append(ActivePump(x, y, direction))
 
     pump_map = {(pump.x, pump.y): pump for pump in active_pumps}
-
     print(f"능동수송 펌프 {len(active_pumps)}개 로드 완료")
-
     return active_pumps, pump_map
 
 
@@ -237,15 +206,8 @@ def load_active_pumps(grid, settings):
 
 
 def build_flow_field(grid, despawner_coords):
-    """
-    출구에서 역방향 BFS를 수행해 각 칸의 출구 방향을 계산한다.
-    벽(1)은 BFS 경로에서 통과할 수 없다.
-    """
-
     flow_field = [[(0, 0) for _ in range(ROWS)] for _ in range(COLS)]
-
     distance_map = [[float("inf") for _ in range(ROWS)] for _ in range(COLS)]
-
     queue = deque()
 
     for x, y in despawner_coords:
@@ -263,7 +225,8 @@ def build_flow_field(grid, despawner_coords):
             if not in_bounds(nx, ny):
                 continue
 
-            if grid[nx][ny] == 1:
+            # 타일 1(세포벽)과 타일 6(완전한 벽)은 BFS 길찾기에서 통과 불가
+            if grid[nx][ny] == 1 or grid[nx][ny] == 6:
                 continue
 
             if distance_map[nx][ny] == float("inf"):
@@ -272,7 +235,7 @@ def build_flow_field(grid, despawner_coords):
 
     for x in range(COLS):
         for y in range(ROWS):
-            if grid[x][y] == 1:
+            if grid[x][y] == 1 or grid[x][y] == 6:
                 continue
 
             current_distance = distance_map[x][y]
@@ -301,37 +264,17 @@ def build_flow_field(grid, despawner_coords):
 
 
 def draw_direction_triangle(screen, x, y, dx, dy):
-    """능동수송 펌프 안에 방향 삼각형을 그린다."""
-
     cx = x * GRID_SIZE + GRID_SIZE // 2
     cy = y * GRID_SIZE + GRID_SIZE // 2
-
-    tip = (
-        cx + dx * 7,
-        cy + dy * 7,
-    )
-
+    tip = (cx + dx * 7, cy + dy * 7)
     px = -dy
     py = dx
-
     base_x = cx - dx * 4
     base_y = cy - dy * 4
+    left = (base_x + px * 5, base_y + py * 5)
+    right = (base_x - px * 5, base_y - py * 5)
 
-    left = (
-        base_x + px * 5,
-        base_y + py * 5,
-    )
-
-    right = (
-        base_x - px * 5,
-        base_y - py * 5,
-    )
-
-    pygame.draw.polygon(
-        screen,
-        (40, 40, 40),
-        [tip, left, right],
-    )
+    pygame.draw.polygon(screen, (40, 40, 40), [tip, left, right])
 
 
 def draw_world(
@@ -340,10 +283,10 @@ def draw_world(
     distance_map,
     active_pump_map,
     substances,
+    show_sodium=True,
 ):
     screen.fill(COLOR_BG)
 
-    # 맵 그리기
     for x in range(COLS):
         for y in range(ROWS):
             rect = pygame.Rect(
@@ -352,85 +295,39 @@ def draw_world(
                 GRID_SIZE - 1,
                 GRID_SIZE - 1,
             )
-
             cell_type = grid[x][y]
 
             if cell_type == 0 and distance_map[x][y] != float("inf"):
-                pygame.draw.rect(
-                    screen,
-                    COLOR_BLOOD,
-                    rect,
-                )
-
+                pygame.draw.rect(screen, COLOR_BLOOD, rect)
             elif cell_type == 1:
-                pygame.draw.rect(
-                    screen,
-                    COLOR_CELL,
-                    rect,
-                )
-
+                pygame.draw.rect(screen, COLOR_CELL, rect)
             elif cell_type == 2:
-                pygame.draw.rect(
-                    screen,
-                    COLOR_SPAWNER,
-                    rect,
-                )
-
+                pygame.draw.rect(screen, COLOR_SPAWNER, rect)
             elif cell_type == 3:
-                pygame.draw.rect(
-                    screen,
-                    COLOR_DESPAWNER,
-                    rect,
-                )
-
+                pygame.draw.rect(screen, COLOR_DESPAWNER, rect)
             elif cell_type == 4:
-                pygame.draw.rect(
-                    screen,
-                    COLOR_PUMP,
-                    rect,
-                )
-
+                pygame.draw.rect(screen, COLOR_PUMP, rect)
             elif cell_type == 5:
-                pygame.draw.rect(
-                    screen,
-                    COLOR_ACTIVE_PUMP,
-                    rect,
-                )
-
+                pygame.draw.rect(screen, COLOR_ACTIVE_PUMP, rect)
                 pump = active_pump_map.get((x, y))
-
                 if pump is not None:
-                    draw_direction_triangle(
-                        screen,
-                        x,
-                        y,
-                        pump.dx,
-                        pump.dy,
-                    )
-
+                    draw_direction_triangle(screen, x, y, pump.dx, pump.dy)
+            elif cell_type == 6:
+                pygame.draw.rect(screen, COLOR_SOLID_WALL, rect)
             else:
-                pygame.draw.rect(
-                    screen,
-                    COLOR_GRID,
-                    rect,
-                    1,
-                )
+                pygame.draw.rect(screen, COLOR_GRID, rect, 1)
 
-    # 물질을 마지막에 그려 구조물과 겹쳐도 표시되도록 한다.
     for sub in substances:
+        # 나트륨 숨기기 옵션 적용
+        if sub.sub_type == "sodium" and not show_sodium:
+            continue
+
         center = (
             sub.x * GRID_SIZE + GRID_SIZE // 2,
             sub.y * GRID_SIZE + GRID_SIZE // 2,
         )
-
         color = COLOR_SODIUM if sub.sub_type == "sodium" else COLOR_GLUCOSE
-
-        pygame.draw.circle(
-            screen,
-            color,
-            center,
-            GRID_SIZE // 3,
-        )
+        pygame.draw.circle(screen, color, center, GRID_SIZE // 3)
 
     pygame.display.flip()
 
@@ -441,16 +338,14 @@ def draw_world(
 
 
 def can_normal_pass(grid, x, y):
-    """
-    일반 이동과 브라운 운동에 사용하는 통과 검사.
-    벽은 20% 확률로 통과한다.
-    """
-
     if not in_bounds(x, y):
         return False
 
-    if grid[x][y] == 1:
-        return random.random() < CELL_PASS_PROBABILITY
+    cell_type = grid[x][y]
+    if cell_type == 6:
+        return False  # 타일 6(완전한 벽): 절대 통과 불가
+    if cell_type == 1:
+        return random.random() < CELL_PASS_PROBABILITY  # 타일 1(세포막): 20% 확률 통과
 
     return True
 
@@ -460,14 +355,7 @@ def apply_active_pump_if_overlapping(
     active_pump_map,
     substance_grid,
 ):
-    """
-    현재 위치에 능동수송 펌프가 있으면 펌프 방향으로 한 칸 이동한다.
-    만약 이 물질이 나트륨(sodium)이고 펌프가 작동한다면, 사방을 확인해
-    포도당(glucose)을 찾아 함께 순간이동시킨다.
-    """
-
     pump = active_pump_map.get((sub.x, sub.y))
-
     if pump is None:
         return sub.x, sub.y, False
 
@@ -477,7 +365,6 @@ def apply_active_pump_if_overlapping(
     if not in_bounds(nx, ny):
         return sub.x, sub.y, True
 
-    # SGLT 공동 수송 로직: 나트륨인 경우 주변 포도당과 함께 이동
     if sub.sub_type == "sodium":
         for dx, dy in DIRECTIONS_4:
             check_x = sub.x + dx
@@ -499,38 +386,22 @@ def move_substance(
     substance_grid,
     active_pump_map,
 ):
-    """
-    물질 하나의 다음 위치를 계산한다.
-
-    반환:
-        (x, y, used_active_pump)
-    """
-
     x, y = sub.x, sub.y
 
-    # 출구에 있는 물질은 이동시키지 않는다.
     if grid[x][y] == 3:
         return x, y, False
-
-    # -----------------------------------------------------
-    # 1. 물질이 펌프 칸과 겹쳐 있는 경우
-    # -----------------------------------------------------
 
     nx, ny, used_pump = apply_active_pump_if_overlapping(
         sub,
         active_pump_map,
         substance_grid,
     )
-
     if used_pump:
         return nx, ny, True
 
-    # -----------------------------------------------------
-    # 2. 현재 위치의 주변 밀집도 계산
-    # -----------------------------------------------------
-
     flow_dx, flow_dy = flow_field[x][y]
 
+    # 주변 밀집도 계산 (같은 물질끼리만 카운트)
     neighbor_counts = {}
     total_neighbors = 0
 
@@ -539,42 +410,25 @@ def move_substance(
         ny = y + dy
 
         if in_bounds(nx, ny):
-            count = len(substance_grid[nx][ny])
-
-            if (nx, ny) == (x, y):
-                count = max(0, count - 1)
-
+            count = sum(
+                1 for other in substance_grid[nx][ny] if other.sub_type == sub.sub_type
+            )
             neighbor_counts[(dx, dy)] = count
             total_neighbors += count
-
         else:
             neighbor_counts[(dx, dy)] = float("inf")
 
-    # -----------------------------------------------------
-    # 3. 일반 이동 후보
-    # -----------------------------------------------------
-
     valid_moves = []
-
     for dx, dy in DIRECTIONS_4:
         nx = x + dx
         ny = y + dy
-
-        if not in_bounds(nx, ny):
-            continue
-
-        if can_normal_pass(grid, nx, ny):
+        if in_bounds(nx, ny) and can_normal_pass(grid, nx, ny):
             valid_moves.append((dx, dy))
-
-    # -----------------------------------------------------
-    # 4. 밀집도 회피 및 BFS 방향 선택
-    # -----------------------------------------------------
 
     used_active_pump = False
 
     if valid_moves:
         min_count = min(neighbor_counts[move] for move in valid_moves)
-
         least_crowded_moves = [
             move for move in valid_moves if neighbor_counts[move] == min_count
         ]
@@ -584,23 +438,16 @@ def move_substance(
                 chosen_dx, chosen_dy = flow_dx, flow_dy
             else:
                 chosen_dx, chosen_dy = random.choice(valid_moves)
-
         else:
             if (flow_dx, flow_dy) in least_crowded_moves:
                 chosen_dx, chosen_dy = flow_dx, flow_dy
             else:
                 chosen_dx, chosen_dy = random.choice(least_crowded_moves)
 
-        # 일반 이동의 바로 앞 칸
         nx = x + chosen_dx
         ny = y + chosen_dy
 
-        # -------------------------------------------------
-        # 5. 펌프를 뛰어넘는 순간이동
-        # -------------------------------------------------
-
         adjacent_pump = active_pump_map.get((nx, ny))
-
         if (
             adjacent_pump is not None
             and adjacent_pump.dx == chosen_dx
@@ -610,7 +457,6 @@ def move_substance(
             ty = ny + adjacent_pump.dy
 
             if in_bounds(tx, ty):
-                # SGLT 공동 수송 로직 (점프 순간)
                 if sub.sub_type == "sodium":
                     for dx, dy in DIRECTIONS_4:
                         check_x = nx + dx
@@ -623,47 +469,31 @@ def move_substance(
                                     break
                 return tx, ty, True
 
-        # 순간이동이 발생하지 않았다면 일반 이동
         x, y = nx, ny
-
-        # 일반 이동으로 펌프 칸에 도착했다면 펌프가 작동한다.
         sub.x, sub.y = x, y
         nx_p, ny_p, used_pump = apply_active_pump_if_overlapping(
             sub,
             active_pump_map,
             substance_grid,
         )
-
         if used_pump:
             return nx_p, ny_p, True
-
-    # -----------------------------------------------------
-    # 6. 출구 확인
-    # -----------------------------------------------------
 
     if grid[x][y] == 3:
         return x, y, False
 
-    # -----------------------------------------------------
-    # 7. 브라운 운동
-    # -----------------------------------------------------
-
     dx, dy = random.choice(DIRECTIONS_4)
-
     bx = x + dx
     by = y + dy
 
     if can_normal_pass(grid, bx, by):
         x, y = bx, by
-
-        # 브라운 운동으로 펌프 칸에 들어온 경우도 작동
         sub.x, sub.y = x, y
         nx_p, ny_p, used_pump = apply_active_pump_if_overlapping(
             sub,
             active_pump_map,
             substance_grid,
         )
-
         if used_pump:
             return nx_p, ny_p, True
 
@@ -677,23 +507,17 @@ def move_substance(
 
 def run_simulation():
     pygame.init()
-
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
-
-    pygame.display.set_caption("Substance Simulation - SGLT Cotransport")
-
+    pygame.display.set_caption("SGLT Simulation (H: 나트륨 토글)")
     clock = pygame.time.Clock()
 
     grid, active_pump_settings = load_map_from_json()
 
     if grid is None:
         print("빈 맵으로 시작합니다.")
-
         grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
-
         active_pump_settings = []
 
-    # 구조물 위치 탐색
     spawner_coords = []
     despawner_coords = []
     pump_coords = []
@@ -701,30 +525,23 @@ def run_simulation():
     for x in range(COLS):
         for y in range(ROWS):
             cell_type = grid[x][y]
-
             if cell_type == 2:
                 spawner_coords.append((x, y))
-
             elif cell_type == 3:
                 despawner_coords.append((x, y))
-
             elif cell_type == 4:
                 pump_coords.append((x, y))
 
-    # 기본 생성기와 출구
     if not spawner_coords:
         spawner_coords.append((0, ROWS // 2))
 
     if not despawner_coords:
         despawner_coords.append((COLS - 1, ROWS // 2))
 
-    # 능동수송 펌프 및 방향 로드
     active_pumps, active_pump_map = load_active_pumps(
         grid,
         active_pump_settings,
     )
-
-    # BFS 경로 계산
     flow_field, distance_map = build_flow_field(
         grid,
         despawner_coords,
@@ -733,6 +550,7 @@ def run_simulation():
     substances = []
     frame_count = 0
     running = True
+    show_sodium = True  # 나트륨 표시 기본값
 
     while running:
         clock.tick(FPS)
@@ -741,10 +559,11 @@ def run_simulation():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-
-        # ---------------------------------------------
-        # 물질 생성 (나트륨과 포도당 모두 스폰)
-        # ---------------------------------------------
+            elif event.type == pygame.KEYDOWN:
+                # H 키를 누르면 나트륨 표시 여부 토글
+                if event.key == pygame.K_h:
+                    show_sodium = not show_sodium
+                    print(f"나트륨 표시: {show_sodium}")
 
         if frame_count % SPAWN_INTERVAL == 0:
             for sx, sy in spawner_coords:
@@ -752,58 +571,34 @@ def run_simulation():
                 for _ in range(SODIUM_TO_GLUCOSE_RATIO):
                     substances.append(Substance(sx, sy, "sodium"))
 
-        # ---------------------------------------------
-        # 현재 물질 위치 맵 생성
-        # ---------------------------------------------
-
         substance_grid = [[[] for _ in range(ROWS)] for _ in range(COLS)]
-
         for sub in substances:
             substance_grid[sub.x][sub.y].append(sub)
 
-        # ---------------------------------------------
-        # 모든 물질의 다음 위치 계산
-        # ---------------------------------------------
-
         future_positions = []
-
         for sub in substances:
             if grid[sub.x][sub.y] == 3:
                 continue
-
-            nx, ny, used_pump = move_substance(
+            nx, ny, _ = move_substance(
                 sub,
                 grid,
                 flow_field,
                 substance_grid,
                 active_pump_map,
             )
-
             future_positions.append((sub, nx, ny))
 
-        # ---------------------------------------------
-        # 이동 결과 일괄 적용
-        # ---------------------------------------------
-
         new_substances = []
-
         for sub, nx, ny in future_positions:
             if not in_bounds(nx, ny):
                 continue
-
             if grid[nx][ny] == 3:
                 continue
-
             sub.x = nx
             sub.y = ny
-
             new_substances.append(sub)
 
         substances = new_substances
-
-        # ---------------------------------------------
-        # 렌더링
-        # ---------------------------------------------
 
         draw_world(
             screen,
@@ -811,6 +606,7 @@ def run_simulation():
             distance_map,
             active_pump_map,
             substances,
+            show_sodium,
         )
 
     pygame.quit()
