@@ -5,7 +5,7 @@ import pygame
 GRID_SIZE = 20
 COLS = 40
 ROWS = 30
-PANEL_WIDTH = 240
+PANEL_WIDTH = 220
 FPS = 60
 
 GRID_WIDTH = COLS * GRID_SIZE
@@ -14,18 +14,18 @@ WINDOW_WIDTH = GRID_WIDTH + PANEL_WIDTH
 WINDOW_HEIGHT = GRID_HEIGHT
 
 COLORS = {
-    0: (35, 35, 35),  # 빈 공간
-    1: (100, 100, 120),  # 벽 / 세포막
-    2: (46, 204, 113),  # 물질 생성기
-    3: (231, 76, 60),  # 출구 / 디스파워너
-    4: (155, 89, 182),  # 액체 펌프 (보라색)
+    0: (35, 35, 35),
+    1: (100, 100, 120),
+    2: (46, 204, 113),
+    3: (231, 76, 60),
+    4: (155, 89, 182),
 }
 LABELS = {
-    0: "0  지우개 / 빈 공간",
-    1: "1  벽 / 세포막",
-    2: "2  물질 생성기",
-    3: "3  출구 / 디스파워너",
-    4: "4  액체 펌프",
+    0: "0 지우개",
+    1: "1 벽",
+    2: "2 생성기",
+    3: "3 출구",
+    4: "4 펌프",
 }
 BG = (20, 20, 20)
 PANEL_BG = (29, 29, 29)
@@ -58,6 +58,23 @@ def load_korean_font(size, bold=False):
     return pygame.font.SysFont(None, size, bold=bold)
 
 
+def load_map():
+    path = Path(__file__).resolve().parent / "map.json"
+    if path.exists():
+        try:
+            with path.open("r", encoding="utf-8") as file:
+                data = json.load(file)
+                if (
+                    data.get("cols") == COLS
+                    and data.get("rows") == ROWS
+                    and "grid" in data
+                ):
+                    return data["grid"], f"불러오기 완료: {path.name}"
+        except Exception as exc:
+            return None, f"불러오기 실패: {exc}"
+    return None, "map.json 없음"
+
+
 def save_map(grid):
     path = Path(__file__).resolve().parent / "map.json"
     payload = {
@@ -81,33 +98,38 @@ def main():
     pygame.init()
     pygame.font.init()
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("맵 편집기 - 드래그 페인트")
+    pygame.display.set_caption("맵 편집기")
     clock = pygame.time.Clock()
 
-    title_font = load_korean_font(22, True)
-    body_font = load_korean_font(17)
-    small_font = load_korean_font(14)
+    title_font = load_korean_font(20, True)
+    body_font = load_korean_font(15)
+    small_font = load_korean_font(13)
 
-    grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
+    loaded_grid, init_status = load_map()
+    grid = (
+        loaded_grid
+        if loaded_grid is not None
+        else [[0 for _ in range(ROWS)] for _ in range(COLS)]
+    )
+
     panel_x = GRID_WIDTH
-    margin = 16
+    margin = 12
     button_w = PANEL_WIDTH - margin * 2
 
-    # 5가지 블록(0~4)에 맞게 팔레트 높이 조정
     palette_rects = {
-        value: pygame.Rect(panel_x + margin, 110 + value * 42, button_w, 36)
+        value: pygame.Rect(panel_x + margin, 70 + value * 34, button_w, 30)
         for value in range(5)
     }
-    save_rect = pygame.Rect(panel_x + margin, 335, button_w, 40)
-    clear_rect = pygame.Rect(panel_x + margin, 385, button_w, 36)
+    save_rect = pygame.Rect(panel_x + margin, 250, button_w, 36)
+    clear_rect = pygame.Rect(panel_x + margin, 292, button_w, 32)
 
     last_painted_cell = None
     paint_value = 1
     selected_value = 1
     mouse_painting = False
-    status = "블록을 고르고 드래그하세요."
-    status_color = MUTED
-    status_expiry = 0
+    status = init_status
+    status_color = (100, 230, 150) if "완료" in init_status else MUTED
+    status_expiry = pygame.time.get_ticks() + 3000
 
     def draw_text(text, x, y, font, color=TEXT):
         screen.blit(font.render(text, True, color), (x, y))
@@ -150,14 +172,14 @@ def main():
                         except OSError as exc:
                             status = f"저장 실패: {exc}"
                             status_color = (255, 130, 120)
-                        status_expiry = pygame.time.get_ticks() + 3500
+                        status_expiry = pygame.time.get_ticks() + 3000
                         mouse_painting = False
                         last_painted_cell = None
                     elif clear_rect.collidepoint(event.pos):
                         grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
-                        status = "맵을 초기화했습니다."
+                        status = "초기화됨"
                         status_color = MUTED
-                        status_expiry = pygame.time.get_ticks() + 2500
+                        status_expiry = pygame.time.get_ticks() + 2000
                         mouse_painting = False
                         last_painted_cell = None
                     elif 0 <= mx < GRID_WIDTH and 0 <= my < GRID_HEIGHT:
@@ -196,28 +218,27 @@ def main():
                 pygame.draw.rect(screen, GRID_LINE, rect, 1)
 
         pygame.draw.rect(screen, PANEL_BG, (panel_x, 0, PANEL_WIDTH, WINDOW_HEIGHT))
-        draw_text("맵 편집기", panel_x + margin, 18, title_font)
-        draw_text(f"맵 크기: {COLS} x {ROWS}", panel_x + margin, 52, small_font, MUTED)
-        draw_text("1. 블록 선택", panel_x + margin, 78, body_font)
+        draw_text("맵 편집기", panel_x + margin, 14, title_font)
+        draw_text(
+            f"{COLS}x{ROWS}", panel_x + PANEL_WIDTH - margin - 45, 18, small_font, MUTED
+        )
 
         mouse_pos = pygame.mouse.get_pos()
         for value, rect in palette_rects.items():
             pygame.draw.rect(screen, COLORS[value], rect, border_radius=4)
             if value == selected_value:
-                pygame.draw.rect(screen, (255, 255, 255), rect, 3, border_radius=4)
+                pygame.draw.rect(screen, (255, 255, 255), rect, 2, border_radius=4)
             else:
                 pygame.draw.rect(screen, GRID_LINE, rect, 1, border_radius=4)
             label = body_font.render(LABELS[value], True, (255, 255, 255))
-            screen.blit(label, (rect.x + 9, rect.centery - label.get_height() // 2))
-
-        draw_text("2. 격자에서 누른 채 드래그", panel_x + margin, 302, small_font)
+            screen.blit(label, (rect.x + 8, rect.centery - label.get_height() // 2))
 
         for rect, label, base, hover in (
             (save_rect, "맵 저장", BLUE, BLUE_HOVER),
-            (clear_rect, "전체 초기화", GRAY, GRAY_HOVER),
+            (clear_rect, "초기화", GRAY, GRAY_HOVER),
         ):
             color = hover if rect.collidepoint(mouse_pos) else base
-            pygame.draw.rect(screen, color, rect, border_radius=5)
+            pygame.draw.rect(screen, color, rect, border_radius=4)
             rendered = body_font.render(label, True, (255, 255, 255))
             screen.blit(
                 rendered,
@@ -228,10 +249,7 @@ def main():
             )
 
         if pygame.time.get_ticks() < status_expiry:
-            draw_text(status, panel_x + margin, 435, small_font, status_color)
-        else:
-            draw_text("저장 파일", panel_x + margin, 435, small_font, MUTED)
-            draw_text("map.json", panel_x + margin, 457, body_font)
+            draw_text(status, panel_x + margin, 345, small_font, status_color)
 
         pygame.display.flip()
 
