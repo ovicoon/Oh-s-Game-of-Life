@@ -64,7 +64,7 @@ def run_simulation():
 
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
 
-    pygame.display.set_caption("Straight Thin-Wall Vessel Simulation")
+    pygame.display.set_caption("Glomerulus and Capillary Simulation")
 
     clock = pygame.time.Clock()
 
@@ -73,89 +73,54 @@ def run_simulation():
     grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
 
     # --- 구조물 배치 설정 ---
-
-    start_x, end_x = 8, COLS - 6  # end_x = 34
-
+    # 혈관 입구를 화면 맨 왼쪽에 두어 사용 가능한 가로 공간을 늘린다.
+    start_x, end_x = 0, COLS - 1
     channel_top, channel_bottom = 8, 16
 
-    # 1. 위/아래 긴 외곽 벽 설정
+    # 일반 모세혈관의 내강은 2칸 높이(y=11, 12)이며,
+    # 위/아래 벽은 여러 칸 두께로 유지한다.
+    vessel_top_y, vessel_bottom_y = 11, 12
+    thin_start_x, thin_end_x = 16, 26  # 토리 역할을 하는 직선·1칸 내강 구간
+    glomerulus_y = 12
+    lower_wall_y = glomerulus_y + 1
 
-    for x in range(start_x, end_x + 1):
-
-        for y in range(channel_top - 3, channel_top):
-
-            grid[x][y] = 1
-
-        for y in range(channel_bottom + 1, channel_bottom + 4):
-
-            grid[x][y] = 1
-
-    # 2. Despawner 뒤쪽 영역을 완전히 세포벽으로 차단
-
-    for x in range(end_x + 1, COLS):
-
-        for y in range(channel_top - 3, channel_bottom + 4):
-
-            grid[x][y] = 1
-
-    # 3. 중앙의 좁고 곧은 혈관 구간 설정
-    # 통로는 가로 방향으로 1칸 높이이며, 위쪽 벽은 두껍게 유지하고
-    # 아래쪽 벽은 정확히 1칸만 남긴다.
-    thin_start_x = 16
-    vessel_y = channel_top + (channel_bottom - channel_top) // 2  # y = 12
-    lower_wall_y = vessel_y + 1
-
-    for x in range(thin_start_x, end_x):
-        # 먼저 해당 구간을 세포벽으로 채운다.
+    for x in range(start_x, end_x):
+        # 우선 혈관 구조물 구역을 벽으로 채운다.
         for y in range(channel_top, channel_bottom + 1):
             grid[x][y] = 1
 
-        # 직선 혈관 내강을 연다: 가로 방향으로 1칸 높이.
-        grid[x][vessel_y] = 0
+        # 일반 모세혈관: 2칸 높이의 내강.
+        if not (thin_start_x <= x < thin_end_x):
+            grid[x][vessel_top_y] = 0
+            grid[x][vessel_bottom_y] = 0
+        else:
+            # 토리 구간: 직선이며 내강은 1칸 높이.
+            # 아래쪽 벽은 y=13 한 칸만 남겨 물질 이동을 관찰할 수 있게 한다.
+            grid[x][glomerulus_y] = 0
+            grid[x][lower_wall_y] = 1
+            for y in range(lower_wall_y + 1, channel_bottom + 1):
+                grid[x][y] = 0
 
-        # 내강 바로 아래(y=13)는 벽 1칸으로 유지하고,
-        # 그 아래는 혈관 바깥 조직 영역으로 남긴다.
+    # 일반 모세혈관 구간의 위쪽/아래쪽 벽을 두껍게 유지한다.
+    # 토리 구간에서는 아래쪽 벽 아래를 조직 공간으로 열어 둔다.
+    for x in range(thin_start_x, thin_end_x):
+        for y in range(channel_top, vessel_top_y):
+            grid[x][y] = 1
+        # 내강 바로 아래 벽 한 칸만 유지
+        grid[x][lower_wall_y] = 1
         for y in range(lower_wall_y + 1, channel_bottom + 1):
             grid[x][y] = 0
 
-    # 얇은 직선 구간에서는 기존의 두꺼운 아래쪽 외벽을 제거한다.
-    # 따라서 내강 바로 아래의 y=13 벽 한 칸만 혈관 아래쪽 벽으로 남는다.
-    # 출구 직전 열(end_x - 1)은 우회 방지를 위해 외벽을 유지한다.
-    for x in range(thin_start_x, end_x - 1):
-        for y in range(channel_bottom + 1, channel_bottom + 4):
-            grid[x][y] = 0
-
-    # 구간의 양 끝을 막아 아래쪽 조직 영역으로 우회하지 못하게 한다.
-    # 중앙 높이(vessel_y)만 열어 넓은 혈관과 직선 통로를 연결한다.
-    for boundary_x in (thin_start_x - 1, end_x - 1):
-        for y in range(channel_top, channel_bottom + 1):
-            grid[boundary_x][y] = 1
-        grid[boundary_x][vessel_y] = 0
-
-    # 4. 입구(Spawner) 및 왼쪽 차단 벽 설정
-
-    spawner_y = channel_top + (channel_bottom - channel_top) // 2
-
+    # 토리 구간과 일반 모세혈관 사이의 연결은 같은 높이에서 유지한다.
+    # 화면 왼쪽 끝에서 바로 혈관으로 들어오도록 별도의 왼쪽 차단벽은 두지 않는다.
+    spawner_y = vessel_top_y
     spawner_pos = (start_x, spawner_y)
+    grid[start_x][spawner_y] = 2
 
-    for y in range(channel_top, channel_bottom + 1):
-
-        grid[start_x][y] = 1
-
-    grid[spawner_pos[0]][spawner_pos[1]] = 2
-
-    for y in range(channel_top - 3, channel_bottom + 4):
-
-        grid[start_x - 1][y] = 1
-
-    # 5. 출구(Despawner) 여러 개 설정 (오른쪽 끝 단면 전체)
-
+    # 출구는 화면 맨 오른쪽 끝에 둔다.
     despawner_coords = []
-
-    for y in range(channel_top, channel_bottom + 1):
-
+    for y in (vessel_top_y, vessel_bottom_y):
         grid[end_x][y] = 3
-
         despawner_coords.append((end_x, y))
 
     # --- BFS를 이용한 자동 유선(Flow Field) 계산 ---
