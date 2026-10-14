@@ -60,7 +60,7 @@ CELL_PASS_PROBABILITY = 0.2
 # 생성 주기
 SPAWN_INTERVAL = 8
 
-SPAWN_PER_INTERVAL = (1, 30)  # (포도당, 나트륨) 비율
+SPAWN_PER_INTERVAL = (10, 30)  # (포도당, 나트륨) 비율
 
 
 # =========================================================
