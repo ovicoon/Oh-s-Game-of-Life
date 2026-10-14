@@ -23,7 +23,10 @@ COLOR_SPAWNER = (46, 204, 113)
 COLOR_DESPAWNER = (231, 76, 60)
 COLOR_PUMP = (155, 89, 182)
 COLOR_ACTIVE_PUMP = (241, 196, 15)
-COLOR_SUBSTANCE = (52, 152, 219)
+
+# 물질별 색상 구분
+COLOR_SODIUM = (241, 196, 15)  # 나트륨 (노란색)
+COLOR_GLUCOSE = (52, 152, 219)  # 포도당 (파란색)
 
 DIRECTIONS_4 = [
     (-1, 0),
@@ -56,6 +59,8 @@ CELL_PASS_PROBABILITY = 0.2
 # 생성 주기
 SPAWN_INTERVAL = 8
 
+SODIUM_TO_GLUCOSE_RATIO = 30  # 포도당 1개당 나트륨 생성 비율
+
 
 # =========================================================
 # 클래스
@@ -63,9 +68,10 @@ SPAWN_INTERVAL = 8
 
 
 class Substance:
-    def __init__(self, x, y):
+    def __init__(self, x, y, sub_type):
         self.x = x
         self.y = y
+        self.sub_type = sub_type  # "sodium" 또는 "glucose"
 
 
 class ActivePump:
@@ -108,7 +114,7 @@ def load_map_from_json():
         grid = data.get("grid")
 
         if data.get("cols") != COLS or data.get("rows") != ROWS:
-            print(f"맵 크기가 일치하지 않습니다. " f"필요한 크기: {COLS}x{ROWS}")
+            print(f"맵 크기가 일치하지 않습니다. 필요한 크기: {COLS}x{ROWS}")
             return None, []
 
         if (
@@ -129,7 +135,7 @@ def load_map_from_json():
                     or isinstance(grid[x][y], bool)
                     or grid[x][y] not in range(6)
                 ):
-                    print(f"잘못된 타일 값: ({x}, {y}) " f"= {grid[x][y]}")
+                    print(f"잘못된 타일 값: ({x}, {y}) = {grid[x][y]}")
                     return None, []
 
         settings = data.get("active_pumps", [])
@@ -417,9 +423,11 @@ def draw_world(
             sub.y * GRID_SIZE + GRID_SIZE // 2,
         )
 
+        color = COLOR_SODIUM if sub.sub_type == "sodium" else COLOR_GLUCOSE
+
         pygame.draw.circle(
             screen,
-            COLOR_SUBSTANCE,
+            color,
             center,
             GRID_SIZE // 3,
         )
@@ -448,30 +456,40 @@ def can_normal_pass(grid, x, y):
 
 
 def apply_active_pump_if_overlapping(
-    x,
-    y,
+    sub,
     active_pump_map,
+    substance_grid,
 ):
     """
-    현재 위치에 능동수송 펌프가 있으면
-    펌프 방향으로 한 칸 이동한다.
-
-    다른 물질 및 구조물과 겹치는 것을 허용한다.
+    현재 위치에 능동수송 펌프가 있으면 펌프 방향으로 한 칸 이동한다.
+    만약 이 물질이 나트륨(sodium)이고 펌프가 작동한다면, 사방을 확인해
+    포도당(glucose)을 찾아 함께 순간이동시킨다.
     """
 
-    pump = active_pump_map.get((x, y))
+    pump = active_pump_map.get((sub.x, sub.y))
 
     if pump is None:
-        return x, y, False
+        return sub.x, sub.y, False
 
-    nx = x + pump.dx
-    ny = y + pump.dy
+    nx = sub.x + pump.dx
+    ny = sub.y + pump.dy
 
-    if in_bounds(nx, ny):
-        return nx, ny, True
+    if not in_bounds(nx, ny):
+        return sub.x, sub.y, True
 
-    # 화면 밖으로 나가게 되는 경우 이동하지 않는다.
-    return x, y, True
+    # SGLT 공동 수송 로직: 나트륨인 경우 주변 포도당과 함께 이동
+    if sub.sub_type == "sodium":
+        for dx, dy in DIRECTIONS_4:
+            check_x = sub.x + dx
+            check_y = sub.y + dy
+            if in_bounds(check_x, check_y):
+                for other_sub in substance_grid[check_x][check_y]:
+                    if other_sub.sub_type == "glucose":
+                        other_sub.x = nx
+                        other_sub.y = ny
+                        break
+
+    return nx, ny, True
 
 
 def move_substance(
@@ -486,8 +504,6 @@ def move_substance(
 
     반환:
         (x, y, used_active_pump)
-
-    능동수송 순간이동이 일어나면 중간 칸의 충돌을 검사하지 않는다.
     """
 
     x, y = sub.x, sub.y
@@ -500,14 +516,14 @@ def move_substance(
     # 1. 물질이 펌프 칸과 겹쳐 있는 경우
     # -----------------------------------------------------
 
-    x, y, used_pump = apply_active_pump_if_overlapping(
-        x,
-        y,
+    nx, ny, used_pump = apply_active_pump_if_overlapping(
+        sub,
         active_pump_map,
+        substance_grid,
     )
 
     if used_pump:
-        return x, y, True
+        return nx, ny, True
 
     # -----------------------------------------------------
     # 2. 현재 위치의 주변 밀집도 계산
@@ -582,13 +598,6 @@ def move_substance(
         # -------------------------------------------------
         # 5. 펌프를 뛰어넘는 순간이동
         # -------------------------------------------------
-        #
-        # 물질의 이동 방향과 펌프의 방향이 같으면
-        # 펌프를 지나 그 방향으로 한 칸 떨어진 곳에 도착한다.
-        #
-        # 예: 물질 -> [펌프 ▶] -> 도착
-        #
-        # 펌프 칸이나 도착 칸의 벽/물질은 충돌을 일으키지 않는다.
 
         adjacent_pump = active_pump_map.get((nx, ny))
 
@@ -601,20 +610,32 @@ def move_substance(
             ty = ny + adjacent_pump.dy
 
             if in_bounds(tx, ty):
+                # SGLT 공동 수송 로직 (점프 순간)
+                if sub.sub_type == "sodium":
+                    for dx, dy in DIRECTIONS_4:
+                        check_x = nx + dx
+                        check_y = ny + dy
+                        if in_bounds(check_x, check_y):
+                            for other_sub in substance_grid[check_x][check_y]:
+                                if other_sub.sub_type == "glucose":
+                                    other_sub.x = tx
+                                    other_sub.y = ty
+                                    break
                 return tx, ty, True
 
         # 순간이동이 발생하지 않았다면 일반 이동
         x, y = nx, ny
 
         # 일반 이동으로 펌프 칸에 도착했다면 펌프가 작동한다.
-        x, y, used_pump = apply_active_pump_if_overlapping(
-            x,
-            y,
+        sub.x, sub.y = x, y
+        nx_p, ny_p, used_pump = apply_active_pump_if_overlapping(
+            sub,
             active_pump_map,
+            substance_grid,
         )
 
         if used_pump:
-            return x, y, True
+            return nx_p, ny_p, True
 
     # -----------------------------------------------------
     # 6. 출구 확인
@@ -636,14 +657,15 @@ def move_substance(
         x, y = bx, by
 
         # 브라운 운동으로 펌프 칸에 들어온 경우도 작동
-        x, y, used_pump = apply_active_pump_if_overlapping(
-            x,
-            y,
+        sub.x, sub.y = x, y
+        nx_p, ny_p, used_pump = apply_active_pump_if_overlapping(
+            sub,
             active_pump_map,
+            substance_grid,
         )
 
         if used_pump:
-            return x, y, True
+            return nx_p, ny_p, True
 
     return x, y, used_active_pump
 
@@ -658,7 +680,7 @@ def run_simulation():
 
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
 
-    pygame.display.set_caption("Substance Simulation - Active Transport Pumps")
+    pygame.display.set_caption("Substance Simulation - SGLT Cotransport")
 
     clock = pygame.time.Clock()
 
@@ -721,17 +743,18 @@ def run_simulation():
                 running = False
 
         # ---------------------------------------------
-        # 물질 생성
+        # 물질 생성 (나트륨과 포도당 모두 스폰)
         # ---------------------------------------------
 
         if frame_count % SPAWN_INTERVAL == 0:
             for sx, sy in spawner_coords:
-                substances.append(Substance(sx, sy))
+                substances.append(Substance(sx, sy, "glucose"))
+                for _ in range(SODIUM_TO_GLUCOSE_RATIO):
+                    substances.append(Substance(sx, sy, "sodium"))
 
         # ---------------------------------------------
         # 현재 물질 위치 맵 생성
         # ---------------------------------------------
-        # 물질끼리 겹칠 수 있으므로 리스트를 사용한다.
 
         substance_grid = [[[] for _ in range(ROWS)] for _ in range(COLS)]
 
@@ -741,7 +764,6 @@ def run_simulation():
         # ---------------------------------------------
         # 모든 물질의 다음 위치 계산
         # ---------------------------------------------
-        # 계산 중에는 기존 물질 위치를 수정하지 않는다.
 
         future_positions = []
 
@@ -762,9 +784,6 @@ def run_simulation():
         # ---------------------------------------------
         # 이동 결과 일괄 적용
         # ---------------------------------------------
-        # 물질 중첩 허용
-        # 벽 및 구조물과의 중첩 허용
-        # 출구에 도착한 물질은 제거
 
         new_substances = []
 
