@@ -60,7 +60,7 @@ CELL_PASS_PROBABILITY = 0.2
 # 생성 주기
 SPAWN_INTERVAL = 8
 
-SODIUM_TO_GLUCOSE_RATIO = 30  # 포도당 1개당 나트륨 생성 비율
+SPAWN_PER_INTERVAL = (1, 30)  # (포도당, 나트륨) 비율
 
 
 # =========================================================
@@ -567,8 +567,9 @@ def run_simulation():
 
         if frame_count % SPAWN_INTERVAL == 0:
             for sx, sy in spawner_coords:
-                substances.append(Substance(sx, sy, "glucose"))
-                for _ in range(SODIUM_TO_GLUCOSE_RATIO):
+                for _ in range(SPAWN_PER_INTERVAL[0]):
+                    substances.append(Substance(sx, sy, "glucose"))
+                for _ in range(SPAWN_PER_INTERVAL[1]):
                     substances.append(Substance(sx, sy, "sodium"))
 
         substance_grid = [[[] for _ in range(ROWS)] for _ in range(COLS)]
