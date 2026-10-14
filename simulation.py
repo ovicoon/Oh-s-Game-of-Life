@@ -21,17 +21,6 @@ COLOR_DESPAWNER = (231, 76, 60)  # 출구 / 디스파워너 (빨강)
 COLOR_PUMP = (155, 89, 182)  # 액체 펌프 (보라)
 COLOR_SUBSTANCE = (52, 152, 219)  # 수용성 물질
 
-DIRECTIONS_8 = [
-    (-1, -1),
-    (0, -1),
-    (1, -1),
-    (-1, 0),
-    (0, 0),
-    (1, 0),
-    (-1, 1),
-    (0, 1),
-    (1, 1),
-]
 DIRECTIONS_4 = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
 
@@ -158,7 +147,7 @@ def run_simulation():
             neighbor_counts = {}
             total_neighbors = 0
 
-            for bdx, bdy in DIRECTIONS_8:
+            for bdx, bdy in DIRECTIONS_4:
                 nx, ny = current_x + bdx, current_y + bdy
                 if 0 <= nx < COLS and 0 <= ny < ROWS:
                     count = len(substance_grid[nx][ny])
@@ -170,7 +159,7 @@ def run_simulation():
                     neighbor_counts[(bdx, bdy)] = float("inf")
 
             valid_moves = []
-            for bdx, bdy in DIRECTIONS_8:
+            for bdx, bdy in DIRECTIONS_4:
                 nx, ny = current_x + bdx, current_y + bdy
                 if 0 <= nx < COLS and 0 <= ny < ROWS:
                     target_type = grid[nx][ny]
@@ -208,7 +197,7 @@ def run_simulation():
                 continue
 
             # --- 브라운 운동 추가 적용 ---
-            bdx, bdy = random.choice(DIRECTIONS_8)
+            bdx, bdy = random.choice(DIRECTIONS_4)
             bx, by = current_x + bdx, current_y + bdy
             if 0 <= bx < COLS and 0 <= by < ROWS:
                 target_cell_type = grid[bx][by]
