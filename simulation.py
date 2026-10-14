@@ -17,7 +17,7 @@ COLOR_BLOOD = (60, 25, 25)
 COLOR_GRID = (40, 40, 40)
 COLOR_CELL = (100, 100, 120)  # 세포 (벽)
 COLOR_SPAWNER = (46, 204, 113)  # 물질 생성기 (초록)
-COLOR_DESPAWNER = (231, 76, 60)  # 출구 / 디스파워너 (빨강)
+COLOR_DESPAWNER = (231, 76, 60)  # 출구 / 디스포너 (빨강)
 COLOR_PUMP = (155, 89, 182)  # 액체 펌프 (보라)
 COLOR_SUBSTANCE = (52, 152, 219)  # 수용성 물질
 
