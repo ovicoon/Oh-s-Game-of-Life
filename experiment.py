@@ -18,7 +18,7 @@ COLOR_SPAWNER = (46, 204, 113)  # 스포너 (입구)
 COLOR_DESPAWNER = (231, 76, 60)  # 디스파워너 (출구 다중 차단)
 COLOR_SUBSTANCE = (52, 152, 219)  # 수용성 물질
 
-# 8방향 브라운 운동을 위한 오프셋 목록
+# 8방향 이동을 위한 오프셋 목록 (자기 자신 포함 9칸 탐색용)
 DIRECTIONS_8 = [
     (-1, -1),
     (0, -1),
@@ -50,7 +50,7 @@ def run_simulation():
     grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
 
     # --- 구조물 배치 설정 ---
-    start_x, end_x = 8, COLS - 6
+    start_x, end_x = 8, COLS - 6  # end_x = 34
     channel_top, channel_bottom = 8, 16
 
     # 1. 위/아래 긴 외곽 벽 설정
@@ -60,28 +60,70 @@ def run_simulation():
         for y in range(channel_bottom + 1, channel_bottom + 4):
             grid[x][y] = 1
 
-    # 2. 혈관 내부를 꼬불꼬불하게 만드는 장애물(세포 벽) 추가
-    for x in range(20, 25):
-        for y in range(channel_top, channel_bottom - 2):
-            grid[x][y] = 1
-    for x in range(28, 33):
-        for y in range(channel_top + 2, channel_bottom + 1):
+    # 2. Despawner 뒤쪽 영역을 완전히 세포벽으로 차단
+    for x in range(end_x + 1, COLS):
+        for y in range(channel_top - 3, channel_bottom + 4):
             grid[x][y] = 1
 
-    # 3. 입구(Spawner) 및 왼쪽 차단 벽 설정
+    # 3. 혈관 내부 중간 구간을 매우 좁고(두께 1칸) 구불구불하게 설정 (대각선 없이 4방향 직교 연결)
+    for x in range(16, end_x):
+        for y in range(channel_top, channel_bottom + 1):
+            grid[x][y] = 1  # 먼저 해당 구간 내부를 모두 세포벽으로 채움
+
+    # 1칸 두께의 구불구불한 길 좌표 지정 (오직 상/하/좌/우 인접 칸으로만 구성)
+    winding_coords = [
+        # 첫 번째 상향 꺾임
+        (16, 12),
+        (17, 12),
+        (18, 12),
+        (19, 12),
+        (19, 11),
+        (19, 10),
+        # 오른쪽으로 이동 후 하향 꺾임
+        (20, 10),
+        (21, 10),
+        (22, 10),
+        (23, 10),
+        (23, 11),
+        (23, 12),
+        (23, 13),
+        (23, 14),
+        # 오른쪽으로 이동 후 상향 꺾임
+        (24, 14),
+        (25, 14),
+        (26, 14),
+        (27, 14),
+        (27, 13),
+        (27, 12),
+        (27, 11),
+        (27, 10),
+        # 오른쪽으로 이동 후 출구로 연결
+        (28, 10),
+        (29, 10),
+        (30, 10),
+        (31, 10),
+        (31, 11),
+        (31, 12),
+        (32, 12),
+        (33, 12),
+        (34, 12),
+    ]
+    for px, py in winding_coords:
+        if 0 <= px < COLS and 0 <= py < ROWS:
+            grid[px][py] = 0
+
+    # 4. 입구(Spawner) 및 왼쪽 차단 벽 설정
     spawner_y = channel_top + (channel_bottom - channel_top) // 2
     spawner_pos = (start_x, spawner_y)
 
-    # 스포너를 감싸는 왼쪽 및 주변 세포벽 구축 (왼쪽으로 혈액이 새지 않도록 완전 차단)
     for y in range(channel_top, channel_bottom + 1):
-        grid[start_x][y] = 1  # 통로 시작면을 전부 세포로 막고
-    grid[spawner_pos[0]][spawner_pos[1]] = 2  # 중앙에만 스포너 배치
+        grid[start_x][y] = 1
+    grid[spawner_pos[0]][spawner_pos[1]] = 2
 
-    # 스포너의 바로 왼쪽 칸들(start_x - 1)도 세포벽으로 채워 왼쪽 공간과 완전히 격리
     for y in range(channel_top - 3, channel_bottom + 4):
         grid[start_x - 1][y] = 1
 
-    # 4. 출구(Despawner) 여러 개 설정 (오른쪽 끝 단면 전체)
+    # 5. 출구(Despawner) 여러 개 설정 (오른쪽 끝 단면 전체)
     despawner_coords = []
     for y in range(channel_top, channel_bottom + 1):
         grid[end_x][y] = 3
@@ -139,45 +181,103 @@ def run_simulation():
         if frame_count % 8 == 0:
             substances.append(Substance(spawner_pos[0], spawner_pos[1]))
 
-        new_substances = []
+        # --- 1단계: 현재 프레임의 물질 위치 맵 구성 (9칸 주변 개수 조회를 위함) ---
+        substance_grid = [[[] for _ in range(ROWS)] for _ in range(COLS)]
         for sub in substances:
+            substance_grid[sub.x][sub.y].append(sub)
+
+        # --- 2단계: 모든 물질의 미래 이동 위치 계산 (반발력 + 브라운 운동 + 일괄 처리) ---
+        future_positions = []
+        cell_pass_probability = 0.2
+
+        for sub in substances:
+            # 이미 출구(Despawner)에 도달한 경우 스킵
             if grid[sub.x][sub.y] == 3:
                 continue
 
-            cell_pass_probability = 0.2
+            current_x, current_y = sub.x, sub.y
 
-            # 1단계: 강제 이동 (Advection)
-            fx_dir, fy_dir = flow_field[sub.x][sub.y]
-            fx = sub.x + fx_dir
-            fy = sub.y + fy_dir
+            # --- [파트 1] 반발력 + 흐름장 기반 이동 계산 ---
+            fx_dir, fy_dir = flow_field[current_x][current_y]
 
-            if 0 <= fx < COLS and 0 <= fy < ROWS:
-                target_cell_type = grid[fx][fy]
-                if target_cell_type == 1:
-                    if random.random() < cell_pass_probability:
-                        sub.x, sub.y = fx, fy
+            # 9칸 주변(3x3 영역)의 다른 물질 개수 조사
+            neighbor_counts = {}
+            total_neighbors = 0
+
+            for bdx, bdy in DIRECTIONS_8:
+                nx, ny = current_x + bdx, current_y + bdy
+                if 0 <= nx < COLS and 0 <= ny < ROWS:
+                    count = len(substance_grid[nx][ny])
+                    if (nx, ny) == (current_x, current_y):
+                        count = max(0, count - 1)
+                    neighbor_counts[(bdx, bdy)] = count
+                    total_neighbors += count
                 else:
-                    sub.x, sub.y = fx, fy
+                    neighbor_counts[(bdx, bdy)] = float("inf")
 
-            if grid[sub.x][sub.y] == 3:
+            valid_moves = []
+            for bdx, bdy in DIRECTIONS_8:
+                nx, ny = current_x + bdx, current_y + bdy
+                if 0 <= nx < COLS and 0 <= ny < ROWS:
+                    target_type = grid[nx][ny]
+                    can_pass = True
+                    if target_type == 1:
+                        if random.random() >= cell_pass_probability:
+                            can_pass = False
+                    if can_pass:
+                        valid_moves.append((bdx, bdy))
+
+            if valid_moves:
+                min_count = float("inf")
+                for bdx, bdy in valid_moves:
+                    cnt = neighbor_counts[(bdx, bdy)]
+                    if cnt < min_count:
+                        min_count = cnt
+
+                least_crowded_moves = [
+                    m for m in valid_moves if neighbor_counts[m] == min_count
+                ]
+
+                if len(least_crowded_moves) == len(valid_moves) or total_neighbors == 0:
+                    if (fx_dir, fy_dir) in valid_moves:
+                        chosen_dx, chosen_dy = fx_dir, fy_dir
+                    else:
+                        chosen_dx, chosen_dy = random.choice(valid_moves)
+                else:
+                    if (fx_dir, fy_dir) in least_crowded_moves:
+                        chosen_dx, chosen_dy = fx_dir, fy_dir
+                    else:
+                        chosen_dx, chosen_dy = random.choice(least_crowded_moves)
+
+                current_x += chosen_dx
+                current_y += chosen_dy
+
+            if grid[current_x][current_y] == 3:
+                future_positions.append((sub, current_x, current_y))
                 continue
 
-            # 2단계: 브라운 운동 (Diffusion)
+            # --- [파트 2] 브라운 운동 (Diffusion) 추가 적용 ---
             bdx, bdy = random.choice(DIRECTIONS_8)
-            bx = sub.x + bdx
-            by = sub.y + bdy
+            bx, by = current_x + bdx, current_y + bdy
 
             if 0 <= bx < COLS and 0 <= by < ROWS:
                 target_cell_type = grid[bx][by]
+                can_brown_pass = True
                 if target_cell_type == 1:
-                    if random.random() < cell_pass_probability:
-                        sub.x, sub.y = bx, by
-                else:
-                    sub.x, sub.y = bx, by
+                    if random.random() >= cell_pass_probability:
+                        can_brown_pass = False
+                if can_brown_pass:
+                    current_x, current_y = bx, by
 
-            if grid[sub.x][sub.y] == 3:
-                continue
+            future_positions.append((sub, current_x, current_y))
 
+        # --- 3단계: 일괄 업데이트 (Batch Update) ---
+        new_substances = []
+        for sub, nx, ny in future_positions:
+            if 0 <= nx < COLS and 0 <= ny < ROWS and grid[nx][ny] == 3:
+                continue  # 출구 도착 시 소멸
+            sub.x = nx
+            sub.y = ny
             new_substances.append(sub)
 
         substances = new_substances
