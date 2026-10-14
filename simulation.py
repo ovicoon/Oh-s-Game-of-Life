@@ -6,18 +6,19 @@ import pygame
 
 # --- 설정 ---
 WIDTH, HEIGHT = 800, 600
-GRID_SIZE = 20  # 각 그리드 칸의 픽셀 크기
+GRID_SIZE = 20
 COLS = WIDTH // GRID_SIZE
 ROWS = HEIGHT // GRID_SIZE
 FPS = 30
 
 # 색상 정의 (RGB)
-COLOR_BG = (20, 20, 20)  # 혈관 바깥 조직 배경
-COLOR_BLOOD = (60, 25, 25)  # 혈액이 흐르는 내부 공간 (어두운 붉은빛)
+COLOR_BG = (20, 20, 20)
+COLOR_BLOOD = (60, 25, 25)
 COLOR_GRID = (40, 40, 40)
 COLOR_CELL = (100, 100, 120)  # 세포 (벽)
-COLOR_SPAWNER = (46, 204, 113)  # 스포너 (입구)
-COLOR_DESPAWNER = (231, 76, 60)  # 디스파워너 (출구)
+COLOR_SPAWNER = (46, 204, 113)  # 물질 생성기 (초록)
+COLOR_DESPAWNER = (231, 76, 60)  # 출구 / 디스파워너 (빨강)
+COLOR_PUMP = (155, 89, 182)  # 액체 펌프 (보라)
 COLOR_SUBSTANCE = (52, 152, 219)  # 수용성 물질
 
 DIRECTIONS_8 = [
@@ -42,7 +43,6 @@ class Substance:
 
 
 def load_map_from_json():
-    """같은 폴더의 map.json 파일을 불러옵니다."""
     path = Path(__file__).resolve().parent / "map.json"
     if path.exists():
         try:
@@ -57,33 +57,37 @@ def load_map_from_json():
 def run_simulation():
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption("Glomerulus and Capillary Simulation (Loaded Map)")
+    pygame.display.set_caption("Separated Spawner/Pump Simulation with Flow Field")
     clock = pygame.time.Clock()
 
-    # 1. 맵 파일 불러오기 시도
     grid = load_map_from_json()
-
-    # 만약 map.json이 없다면 기본 빈 맵 생성
     if grid is None:
         print("map.json을 찾을 수 없어 빈 맵으로 시작합니다.")
         grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
 
-    # 2. 불러온 맵에서 스포너(2)와 디스파워너(3) 위치 동적 탐색
-    spawner_pos = None
+    # 구조물 위치 탐색
+    spawner_coords = []
+    pump_coords = []
     despawner_coords = []
 
     for x in range(COLS):
         for y in range(ROWS):
             if grid[x][y] == 2:
-                spawner_pos = (x, y)
+                spawner_coords.append((x, y))
             elif grid[x][y] == 3:
                 despawner_coords.append((x, y))
+            elif grid[x][y] == 4:
+                pump_coords.append((x, y))
 
-    # 스포너가 정의되지 않은 경우 기본 위치 지정
-    if not spawner_pos:
-        spawner_pos = (0, ROWS // 2)
+    # 기본값 설정
+    if not spawner_coords:
+        spawner_coords.append((0, ROWS // 2))
+    if not despawner_coords:
+        despawner_coords.append((COLS - 1, ROWS // 2))
 
-    # --- BFS를 이용한 자동 유선(Flow Field) 계산 ---
+    # --- [강제 이동 알고리즘] BFS를 이용한 유선(Flow Field) 계산 ---
+    # 출구(Despawner, 3)를 거리 0으로 두고 역추적하여,
+    # 모든 빈 공간에서 출구 방향으로 향하는 최단 경로 벡터(Flow Field)를 생성합니다.
     flow_field = [[(0, 0) for _ in range(ROWS)] for _ in range(COLS)]
     distance_map = [[float("inf") for _ in range(ROWS)] for _ in range(COLS)]
     queue = deque()
@@ -98,10 +102,12 @@ def run_simulation():
         for dx, dy in DIRECTIONS_4:
             nx, ny = cx + dx, cy + dy
             if 0 <= nx < COLS and 0 <= ny < ROWS:
+                # 벽(1)이 아니고 아직 방문하지 않은 경우
                 if grid[nx][ny] != 1 and distance_map[nx][ny] == float("inf"):
                     distance_map[nx][ny] = current_dist + 1
                     queue.append((nx, ny))
 
+    # 각 칸에서 거리가 '줄어드는' 방향(출구 방향)을 강제 이동 벡터로 지정
     for x in range(COLS):
         for y in range(ROWS):
             if grid[x][y] == 1:
@@ -128,16 +134,17 @@ def run_simulation():
             if event.type == pygame.QUIT:
                 running = False
 
-        # 스포너가 존재할 때만 물질 생성
-        if spawner_pos and frame_count % 8 == 0:
-            substances.append(Substance(spawner_pos[0], spawner_pos[1]))
+        # 물질 생성기(2) 위치에서 주기적으로 물질 생성
+        if frame_count % 8 == 0:
+            for sx, sy in spawner_coords:
+                substances.append(Substance(sx, sy))
 
         # --- 1단계: 현재 프레임의 물질 위치 맵 구성 ---
         substance_grid = [[[] for _ in range(ROWS)] for _ in range(COLS)]
         for sub in substances:
             substance_grid[sub.x][sub.y].append(sub)
 
-        # --- 2단계: 모든 물질의 미래 이동 위치 계산 ---
+        # --- 2단계: 모든 물질의 이동 위치 계산 (강제 이동 + 밀집도 회피 + 브라운 운동) ---
         future_positions = []
         cell_pass_probability = 0.2
 
@@ -146,6 +153,7 @@ def run_simulation():
                 continue
             current_x, current_y = sub.x, sub.y
 
+            # 강제 이동 방향 가져오기
             fx_dir, fy_dir = flow_field[current_x][current_y]
             neighbor_counts = {}
             total_neighbors = 0
@@ -238,6 +246,8 @@ def run_simulation():
                     pygame.draw.rect(screen, COLOR_SPAWNER, rect)
                 elif cell_type == 3:
                     pygame.draw.rect(screen, COLOR_DESPAWNER, rect)
+                elif cell_type == 4:
+                    pygame.draw.rect(screen, COLOR_PUMP, rect)
                 else:
                     pygame.draw.rect(screen, COLOR_GRID, rect, 1)
 
