@@ -4,116 +4,713 @@ from pathlib import Path
 import random
 import pygame
 
-# --- 설정 ---
+# =========================================================
+# 설정
+# =========================================================
+
 WIDTH, HEIGHT = 800, 600
 GRID_SIZE = 20
 COLS = WIDTH // GRID_SIZE
 ROWS = HEIGHT // GRID_SIZE
 FPS = 30
 
-# 색상 정의 (RGB)
+# 색상
 COLOR_BG = (20, 20, 20)
 COLOR_BLOOD = (60, 25, 25)
 COLOR_GRID = (40, 40, 40)
-COLOR_CELL = (100, 100, 120)  # 세포 (벽)
-COLOR_SPAWNER = (46, 204, 113)  # 물질 생성기 (초록)
-COLOR_DESPAWNER = (231, 76, 60)  # 출구 / 디스포너 (빨강)
-COLOR_PUMP = (155, 89, 182)  # 액체 펌프 (보라)
-COLOR_SUBSTANCE = (52, 152, 219)  # 수용성 물질
+COLOR_CELL = (100, 100, 120)
+COLOR_SPAWNER = (46, 204, 113)
+COLOR_DESPAWNER = (231, 76, 60)
+COLOR_PUMP = (155, 89, 182)
+COLOR_ACTIVE_PUMP = (241, 196, 15)
+COLOR_SUBSTANCE = (52, 152, 219)
 
-DIRECTIONS_4 = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+DIRECTIONS_4 = [
+    (-1, 0),
+    (1, 0),
+    (0, -1),
+    (0, 1),
+]
+
+# JSON 방향 문자열 -> 좌표 변화량
+DIRECTION_MAP = {
+    "left": (-1, 0),
+    "right": (1, 0),
+    "up": (0, -1),
+    "down": (0, 1),
+}
+
+DIRECTION_LABELS = {
+    "left": "왼쪽",
+    "right": "오른쪽",
+    "up": "위쪽",
+    "down": "아래쪽",
+}
+
+# 방향 정보가 없는 능동수송 펌프의 기본 방향
+DEFAULT_ACTIVE_PUMP_DIRECTION = "right"
+
+# 벽을 통과할 확률
+CELL_PASS_PROBABILITY = 0.2
+
+# 생성 주기
+SPAWN_INTERVAL = 8
+
+
+# =========================================================
+# 클래스
+# =========================================================
 
 
 class Substance:
-
     def __init__(self, x, y):
         self.x = x
         self.y = y
 
 
+class ActivePump:
+    def __init__(self, x, y, direction):
+        self.x = x
+        self.y = y
+        self.direction = direction
+
+        self.dx, self.dy = DIRECTION_MAP[direction]
+
+
+# =========================================================
+# 공통 함수
+# =========================================================
+
+
+def in_bounds(x, y):
+    return 0 <= x < COLS and 0 <= y < ROWS
+
+
 def load_map_from_json():
+    """
+    맵 에디터에서 저장한 map.json을 읽는다.
+
+    반환:
+        grid: grid[x][y] 형태의 맵
+        active_pump_settings: 능동수송 펌프 설정 목록
+    """
+
     path = Path(__file__).resolve().parent / "map.json"
-    if path.exists():
+
+    if not path.exists():
+        print("map.json이 없습니다.")
+        return None, []
+
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        grid = data.get("grid")
+
+        if data.get("cols") != COLS or data.get("rows") != ROWS:
+            print(f"맵 크기가 일치하지 않습니다. " f"필요한 크기: {COLS}x{ROWS}")
+            return None, []
+
+        if (
+            not isinstance(grid, list)
+            or len(grid) != COLS
+            or not all(
+                isinstance(column, list) and len(column) == ROWS for column in grid
+            )
+        ):
+            print("map.json의 grid 데이터 형식이 잘못되었습니다.")
+            return None, []
+
+        # 타일 값 검증
+        for x in range(COLS):
+            for y in range(ROWS):
+                if (
+                    not isinstance(grid[x][y], int)
+                    or isinstance(grid[x][y], bool)
+                    or grid[x][y] not in range(6)
+                ):
+                    print(f"잘못된 타일 값: ({x}, {y}) " f"= {grid[x][y]}")
+                    return None, []
+
+        settings = data.get("active_pumps", [])
+
+        if not isinstance(settings, list):
+            print("active_pumps는 배열이어야 합니다.")
+            return None, []
+
+        print(f"맵 로드 완료: {path.name}")
+
+        return grid, settings
+
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"맵 파일 읽기 실패: {exc}")
+        return None, []
+
+    except Exception as exc:
+        print(f"맵 로드 중 오류 발생: {exc}")
+        return None, []
+
+
+def load_active_pumps(grid, settings):
+    """
+    JSON 설정을 검증하고 능동수송 펌프를 생성한다.
+
+    JSON에 방향이 없는 펌프는 오른쪽을 기본 방향으로 사용한다.
+    """
+
+    directions_by_position = {}
+
+    for item in settings:
         try:
-            with path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data.get("grid")
-        except Exception as e:
-            print(f"맵 로드 중 오류 발생: {e}")
-    return None
+            x = item["x"]
+            y = item["y"]
+            direction = item["direction"]
 
+            if (
+                not isinstance(x, int)
+                or isinstance(x, bool)
+                or not isinstance(y, int)
+                or isinstance(y, bool)
+            ):
+                print(f"펌프 좌표가 정수가 아닙니다: {item}")
+                continue
 
-def run_simulation():
-    pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption("Separated Spawner/Pump Simulation with Flow Field")
-    clock = pygame.time.Clock()
+            if not in_bounds(x, y):
+                print(f"펌프 좌표가 범위를 벗어났습니다: {item}")
+                continue
 
-    grid = load_map_from_json()
-    if grid is None:
-        print("map.json을 찾을 수 없어 빈 맵으로 시작합니다.")
-        grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
+            if grid[x][y] != 5:
+                print(f"({x}, {y}) 위치는 능동수송 펌프(5)가 아닙니다.")
+                continue
 
-    # 구조물 위치 탐색
-    spawner_coords = []
-    pump_coords = []
-    despawner_coords = []
+            if not isinstance(direction, str):
+                print(f"펌프 방향이 문자열이 아닙니다: {item}")
+                continue
+
+            direction = direction.lower()
+
+            if direction not in DIRECTION_MAP:
+                print(f"잘못된 펌프 방향: {item}")
+                continue
+
+            directions_by_position[(x, y)] = direction
+
+        except (KeyError, TypeError):
+            print(f"잘못된 펌프 설정: {item}")
+
+    active_pumps = []
 
     for x in range(COLS):
         for y in range(ROWS):
-            if grid[x][y] == 2:
-                spawner_coords.append((x, y))
-            elif grid[x][y] == 3:
-                despawner_coords.append((x, y))
-            elif grid[x][y] == 4:
-                pump_coords.append((x, y))
+            if grid[x][y] != 5:
+                continue
 
-    # 기본값 설정
-    if not spawner_coords:
-        spawner_coords.append((0, ROWS // 2))
-    if not despawner_coords:
-        despawner_coords.append((COLS - 1, ROWS // 2))
+            direction = directions_by_position.get(
+                (x, y),
+                DEFAULT_ACTIVE_PUMP_DIRECTION,
+            )
 
-    # --- [강제 이동 알고리즘] BFS를 이용한 유선(Flow Field) 계산 ---
-    # 출구(Despawner, 3)를 거리 0으로 두고 역추적하여,
-    # 모든 빈 공간에서 출구 방향으로 향하는 최단 경로 벡터(Flow Field)를 생성합니다.
+            if (x, y) not in directions_by_position:
+                print(
+                    f"펌프 ({x}, {y})의 방향 정보가 없어 "
+                    f"{DIRECTION_LABELS[direction]}을 기본 방향으로 사용합니다."
+                )
+
+            active_pumps.append(ActivePump(x, y, direction))
+
+    pump_map = {(pump.x, pump.y): pump for pump in active_pumps}
+
+    print(f"능동수송 펌프 {len(active_pumps)}개 로드 완료")
+
+    return active_pumps, pump_map
+
+
+# =========================================================
+# BFS 유선 계산
+# =========================================================
+
+
+def build_flow_field(grid, despawner_coords):
+    """
+    출구에서 역방향 BFS를 수행해 각 칸의 출구 방향을 계산한다.
+    벽(1)은 BFS 경로에서 통과할 수 없다.
+    """
+
     flow_field = [[(0, 0) for _ in range(ROWS)] for _ in range(COLS)]
+
     distance_map = [[float("inf") for _ in range(ROWS)] for _ in range(COLS)]
+
     queue = deque()
 
-    for dx, dy in despawner_coords:
-        distance_map[dx][dy] = 0
-        queue.append((dx, dy))
+    for x, y in despawner_coords:
+        distance_map[x][y] = 0
+        queue.append((x, y))
 
     while queue:
         cx, cy = queue.popleft()
-        current_dist = distance_map[cx][cy]
-        for dx, dy in DIRECTIONS_4:
-            nx, ny = cx + dx, cy + dy
-            if 0 <= nx < COLS and 0 <= ny < ROWS:
-                # 벽(1)이 아니고 아직 방문하지 않은 경우
-                if grid[nx][ny] != 1 and distance_map[nx][ny] == float("inf"):
-                    distance_map[nx][ny] = current_dist + 1
-                    queue.append((nx, ny))
+        current_distance = distance_map[cx][cy]
 
-    # 각 칸에서 거리가 '줄어드는' 방향(출구 방향)을 강제 이동 벡터로 지정
+        for dx, dy in DIRECTIONS_4:
+            nx = cx + dx
+            ny = cy + dy
+
+            if not in_bounds(nx, ny):
+                continue
+
+            if grid[nx][ny] == 1:
+                continue
+
+            if distance_map[nx][ny] == float("inf"):
+                distance_map[nx][ny] = current_distance + 1
+                queue.append((nx, ny))
+
     for x in range(COLS):
         for y in range(ROWS):
             if grid[x][y] == 1:
                 continue
-            best_dx, best_dy = 0, 0
-            min_dist = distance_map[x][y]
+
+            current_distance = distance_map[x][y]
+            best_direction = (0, 0)
+            min_distance = current_distance
+
             for dx, dy in DIRECTIONS_4:
-                nx, ny = x + dx, y + dy
-                if 0 <= nx < COLS and 0 <= ny < ROWS:
-                    if distance_map[nx][ny] < min_dist:
-                        min_dist = distance_map[nx][ny]
-                        best_dx, best_dy = dx, dy
-            flow_field[x][y] = (best_dx, best_dy)
+                nx = x + dx
+                ny = y + dy
+
+                if not in_bounds(nx, ny):
+                    continue
+
+                if distance_map[nx][ny] < min_distance:
+                    min_distance = distance_map[nx][ny]
+                    best_direction = (dx, dy)
+
+            flow_field[x][y] = best_direction
+
+    return flow_field, distance_map
+
+
+# =========================================================
+# 렌더링
+# =========================================================
+
+
+def draw_direction_triangle(screen, x, y, dx, dy):
+    """능동수송 펌프 안에 방향 삼각형을 그린다."""
+
+    cx = x * GRID_SIZE + GRID_SIZE // 2
+    cy = y * GRID_SIZE + GRID_SIZE // 2
+
+    tip = (
+        cx + dx * 7,
+        cy + dy * 7,
+    )
+
+    px = -dy
+    py = dx
+
+    base_x = cx - dx * 4
+    base_y = cy - dy * 4
+
+    left = (
+        base_x + px * 5,
+        base_y + py * 5,
+    )
+
+    right = (
+        base_x - px * 5,
+        base_y - py * 5,
+    )
+
+    pygame.draw.polygon(
+        screen,
+        (40, 40, 40),
+        [tip, left, right],
+    )
+
+
+def draw_world(
+    screen,
+    grid,
+    distance_map,
+    active_pump_map,
+    substances,
+):
+    screen.fill(COLOR_BG)
+
+    # 맵 그리기
+    for x in range(COLS):
+        for y in range(ROWS):
+            rect = pygame.Rect(
+                x * GRID_SIZE,
+                y * GRID_SIZE,
+                GRID_SIZE - 1,
+                GRID_SIZE - 1,
+            )
+
+            cell_type = grid[x][y]
+
+            if cell_type == 0 and distance_map[x][y] != float("inf"):
+                pygame.draw.rect(
+                    screen,
+                    COLOR_BLOOD,
+                    rect,
+                )
+
+            elif cell_type == 1:
+                pygame.draw.rect(
+                    screen,
+                    COLOR_CELL,
+                    rect,
+                )
+
+            elif cell_type == 2:
+                pygame.draw.rect(
+                    screen,
+                    COLOR_SPAWNER,
+                    rect,
+                )
+
+            elif cell_type == 3:
+                pygame.draw.rect(
+                    screen,
+                    COLOR_DESPAWNER,
+                    rect,
+                )
+
+            elif cell_type == 4:
+                pygame.draw.rect(
+                    screen,
+                    COLOR_PUMP,
+                    rect,
+                )
+
+            elif cell_type == 5:
+                pygame.draw.rect(
+                    screen,
+                    COLOR_ACTIVE_PUMP,
+                    rect,
+                )
+
+                pump = active_pump_map.get((x, y))
+
+                if pump is not None:
+                    draw_direction_triangle(
+                        screen,
+                        x,
+                        y,
+                        pump.dx,
+                        pump.dy,
+                    )
+
+            else:
+                pygame.draw.rect(
+                    screen,
+                    COLOR_GRID,
+                    rect,
+                    1,
+                )
+
+    # 물질을 마지막에 그려 구조물과 겹쳐도 표시되도록 한다.
+    for sub in substances:
+        center = (
+            sub.x * GRID_SIZE + GRID_SIZE // 2,
+            sub.y * GRID_SIZE + GRID_SIZE // 2,
+        )
+
+        pygame.draw.circle(
+            screen,
+            COLOR_SUBSTANCE,
+            center,
+            GRID_SIZE // 3,
+        )
+
+    pygame.display.flip()
+
+
+# =========================================================
+# 이동 알고리즘
+# =========================================================
+
+
+def can_normal_pass(grid, x, y):
+    """
+    일반 이동과 브라운 운동에 사용하는 통과 검사.
+    벽은 20% 확률로 통과한다.
+    """
+
+    if not in_bounds(x, y):
+        return False
+
+    if grid[x][y] == 1:
+        return random.random() < CELL_PASS_PROBABILITY
+
+    return True
+
+
+def apply_active_pump_if_overlapping(
+    x,
+    y,
+    active_pump_map,
+):
+    """
+    현재 위치에 능동수송 펌프가 있으면
+    펌프 방향으로 한 칸 이동한다.
+
+    다른 물질 및 구조물과 겹치는 것을 허용한다.
+    """
+
+    pump = active_pump_map.get((x, y))
+
+    if pump is None:
+        return x, y, False
+
+    nx = x + pump.dx
+    ny = y + pump.dy
+
+    if in_bounds(nx, ny):
+        return nx, ny, True
+
+    # 화면 밖으로 나가게 되는 경우 이동하지 않는다.
+    return x, y, True
+
+
+def move_substance(
+    sub,
+    grid,
+    flow_field,
+    substance_grid,
+    active_pump_map,
+):
+    """
+    물질 하나의 다음 위치를 계산한다.
+
+    반환:
+        (x, y, used_active_pump)
+
+    능동수송 순간이동이 일어나면 중간 칸의 충돌을 검사하지 않는다.
+    """
+
+    x, y = sub.x, sub.y
+
+    # 출구에 있는 물질은 이동시키지 않는다.
+    if grid[x][y] == 3:
+        return x, y, False
+
+    # -----------------------------------------------------
+    # 1. 물질이 펌프 칸과 겹쳐 있는 경우
+    # -----------------------------------------------------
+
+    x, y, used_pump = apply_active_pump_if_overlapping(
+        x,
+        y,
+        active_pump_map,
+    )
+
+    if used_pump:
+        return x, y, True
+
+    # -----------------------------------------------------
+    # 2. 현재 위치의 주변 밀집도 계산
+    # -----------------------------------------------------
+
+    flow_dx, flow_dy = flow_field[x][y]
+
+    neighbor_counts = {}
+    total_neighbors = 0
+
+    for dx, dy in DIRECTIONS_4:
+        nx = x + dx
+        ny = y + dy
+
+        if in_bounds(nx, ny):
+            count = len(substance_grid[nx][ny])
+
+            if (nx, ny) == (x, y):
+                count = max(0, count - 1)
+
+            neighbor_counts[(dx, dy)] = count
+            total_neighbors += count
+
+        else:
+            neighbor_counts[(dx, dy)] = float("inf")
+
+    # -----------------------------------------------------
+    # 3. 일반 이동 후보
+    # -----------------------------------------------------
+
+    valid_moves = []
+
+    for dx, dy in DIRECTIONS_4:
+        nx = x + dx
+        ny = y + dy
+
+        if not in_bounds(nx, ny):
+            continue
+
+        if can_normal_pass(grid, nx, ny):
+            valid_moves.append((dx, dy))
+
+    # -----------------------------------------------------
+    # 4. 밀집도 회피 및 BFS 방향 선택
+    # -----------------------------------------------------
+
+    used_active_pump = False
+
+    if valid_moves:
+        min_count = min(neighbor_counts[move] for move in valid_moves)
+
+        least_crowded_moves = [
+            move for move in valid_moves if neighbor_counts[move] == min_count
+        ]
+
+        if len(least_crowded_moves) == len(valid_moves) or total_neighbors == 0:
+            if (flow_dx, flow_dy) in valid_moves:
+                chosen_dx, chosen_dy = flow_dx, flow_dy
+            else:
+                chosen_dx, chosen_dy = random.choice(valid_moves)
+
+        else:
+            if (flow_dx, flow_dy) in least_crowded_moves:
+                chosen_dx, chosen_dy = flow_dx, flow_dy
+            else:
+                chosen_dx, chosen_dy = random.choice(least_crowded_moves)
+
+        # 일반 이동의 바로 앞 칸
+        nx = x + chosen_dx
+        ny = y + chosen_dy
+
+        # -------------------------------------------------
+        # 5. 펌프를 뛰어넘는 순간이동
+        # -------------------------------------------------
+        #
+        # 물질의 이동 방향과 펌프의 방향이 같으면
+        # 펌프를 지나 그 방향으로 한 칸 떨어진 곳에 도착한다.
+        #
+        # 예: 물질 -> [펌프 ▶] -> 도착
+        #
+        # 펌프 칸이나 도착 칸의 벽/물질은 충돌을 일으키지 않는다.
+
+        adjacent_pump = active_pump_map.get((nx, ny))
+
+        if (
+            adjacent_pump is not None
+            and adjacent_pump.dx == chosen_dx
+            and adjacent_pump.dy == chosen_dy
+        ):
+            tx = nx + adjacent_pump.dx
+            ty = ny + adjacent_pump.dy
+
+            if in_bounds(tx, ty):
+                return tx, ty, True
+
+        # 순간이동이 발생하지 않았다면 일반 이동
+        x, y = nx, ny
+
+        # 일반 이동으로 펌프 칸에 도착했다면 펌프가 작동한다.
+        x, y, used_pump = apply_active_pump_if_overlapping(
+            x,
+            y,
+            active_pump_map,
+        )
+
+        if used_pump:
+            return x, y, True
+
+    # -----------------------------------------------------
+    # 6. 출구 확인
+    # -----------------------------------------------------
+
+    if grid[x][y] == 3:
+        return x, y, False
+
+    # -----------------------------------------------------
+    # 7. 브라운 운동
+    # -----------------------------------------------------
+
+    dx, dy = random.choice(DIRECTIONS_4)
+
+    bx = x + dx
+    by = y + dy
+
+    if can_normal_pass(grid, bx, by):
+        x, y = bx, by
+
+        # 브라운 운동으로 펌프 칸에 들어온 경우도 작동
+        x, y, used_pump = apply_active_pump_if_overlapping(
+            x,
+            y,
+            active_pump_map,
+        )
+
+        if used_pump:
+            return x, y, True
+
+    return x, y, used_active_pump
+
+
+# =========================================================
+# 메인 시뮬레이션
+# =========================================================
+
+
+def run_simulation():
+    pygame.init()
+
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+
+    pygame.display.set_caption("Substance Simulation - Active Transport Pumps")
+
+    clock = pygame.time.Clock()
+
+    grid, active_pump_settings = load_map_from_json()
+
+    if grid is None:
+        print("빈 맵으로 시작합니다.")
+
+        grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
+
+        active_pump_settings = []
+
+    # 구조물 위치 탐색
+    spawner_coords = []
+    despawner_coords = []
+    pump_coords = []
+
+    for x in range(COLS):
+        for y in range(ROWS):
+            cell_type = grid[x][y]
+
+            if cell_type == 2:
+                spawner_coords.append((x, y))
+
+            elif cell_type == 3:
+                despawner_coords.append((x, y))
+
+            elif cell_type == 4:
+                pump_coords.append((x, y))
+
+    # 기본 생성기와 출구
+    if not spawner_coords:
+        spawner_coords.append((0, ROWS // 2))
+
+    if not despawner_coords:
+        despawner_coords.append((COLS - 1, ROWS // 2))
+
+    # 능동수송 펌프 및 방향 로드
+    active_pumps, active_pump_map = load_active_pumps(
+        grid,
+        active_pump_settings,
+    )
+
+    # BFS 경로 계산
+    flow_field, distance_map = build_flow_field(
+        grid,
+        despawner_coords,
+    )
 
     substances = []
-    running = True
     frame_count = 0
+    running = True
 
     while running:
         clock.tick(FPS)
@@ -123,130 +720,79 @@ def run_simulation():
             if event.type == pygame.QUIT:
                 running = False
 
-        # 물질 생성기(2) 위치에서 주기적으로 물질 생성
-        if frame_count % 8 == 0:
+        # ---------------------------------------------
+        # 물질 생성
+        # ---------------------------------------------
+
+        if frame_count % SPAWN_INTERVAL == 0:
             for sx, sy in spawner_coords:
                 substances.append(Substance(sx, sy))
 
-        # --- 1단계: 현재 프레임의 물질 위치 맵 구성 ---
+        # ---------------------------------------------
+        # 현재 물질 위치 맵 생성
+        # ---------------------------------------------
+        # 물질끼리 겹칠 수 있으므로 리스트를 사용한다.
+
         substance_grid = [[[] for _ in range(ROWS)] for _ in range(COLS)]
+
         for sub in substances:
             substance_grid[sub.x][sub.y].append(sub)
 
-        # --- 2단계: 모든 물질의 이동 위치 계산 (강제 이동 + 밀집도 회피 + 브라운 운동) ---
+        # ---------------------------------------------
+        # 모든 물질의 다음 위치 계산
+        # ---------------------------------------------
+        # 계산 중에는 기존 물질 위치를 수정하지 않는다.
+
         future_positions = []
-        cell_pass_probability = 0.2
 
         for sub in substances:
             if grid[sub.x][sub.y] == 3:
                 continue
-            current_x, current_y = sub.x, sub.y
 
-            # 강제 이동 방향 가져오기
-            fx_dir, fy_dir = flow_field[current_x][current_y]
-            neighbor_counts = {}
-            total_neighbors = 0
+            nx, ny, used_pump = move_substance(
+                sub,
+                grid,
+                flow_field,
+                substance_grid,
+                active_pump_map,
+            )
 
-            for bdx, bdy in DIRECTIONS_4:
-                nx, ny = current_x + bdx, current_y + bdy
-                if 0 <= nx < COLS and 0 <= ny < ROWS:
-                    count = len(substance_grid[nx][ny])
-                    if (nx, ny) == (current_x, current_y):
-                        count = max(0, count - 1)
-                    neighbor_counts[(bdx, bdy)] = count
-                    total_neighbors += count
-                else:
-                    neighbor_counts[(bdx, bdy)] = float("inf")
+            future_positions.append((sub, nx, ny))
 
-            valid_moves = []
-            for bdx, bdy in DIRECTIONS_4:
-                nx, ny = current_x + bdx, current_y + bdy
-                if 0 <= nx < COLS and 0 <= ny < ROWS:
-                    target_type = grid[nx][ny]
-                    can_pass = True
-                    if target_type == 1:
-                        if random.random() >= cell_pass_probability:
-                            can_pass = False
-                    if can_pass:
-                        valid_moves.append((bdx, bdy))
+        # ---------------------------------------------
+        # 이동 결과 일괄 적용
+        # ---------------------------------------------
+        # 물질 중첩 허용
+        # 벽 및 구조물과의 중첩 허용
+        # 출구에 도착한 물질은 제거
 
-            if valid_moves:
-                min_count = float("inf")
-                for bdx, bdy in valid_moves:
-                    cnt = neighbor_counts[(bdx, bdy)]
-                    if cnt < min_count:
-                        min_count = cnt
-                least_crowded_moves = [
-                    m for m in valid_moves if neighbor_counts[m] == min_count
-                ]
-                if len(least_crowded_moves) == len(valid_moves) or total_neighbors == 0:
-                    if (fx_dir, fy_dir) in valid_moves:
-                        chosen_dx, chosen_dy = fx_dir, fy_dir
-                    else:
-                        chosen_dx, chosen_dy = random.choice(valid_moves)
-                else:
-                    if (fx_dir, fy_dir) in least_crowded_moves:
-                        chosen_dx, chosen_dy = fx_dir, fy_dir
-                    else:
-                        chosen_dx, chosen_dy = random.choice(least_crowded_moves)
-                current_x += chosen_dx
-                current_y += chosen_dy
-
-            if grid[current_x][current_y] == 3:
-                future_positions.append((sub, current_x, current_y))
-                continue
-
-            # --- 브라운 운동 추가 적용 ---
-            bdx, bdy = random.choice(DIRECTIONS_4)
-            bx, by = current_x + bdx, current_y + bdy
-            if 0 <= bx < COLS and 0 <= by < ROWS:
-                target_cell_type = grid[bx][by]
-                can_brown_pass = True
-                if target_cell_type == 1:
-                    if random.random() >= cell_pass_probability:
-                        can_brown_pass = False
-                if can_brown_pass:
-                    current_x, current_y = bx, by
-            future_positions.append((sub, current_x, current_y))
-
-        # --- 3단계: 일괄 업데이트 ---
         new_substances = []
+
         for sub, nx, ny in future_positions:
-            if 0 <= nx < COLS and 0 <= ny < ROWS and grid[nx][ny] == 3:
+            if not in_bounds(nx, ny):
                 continue
+
+            if grid[nx][ny] == 3:
+                continue
+
             sub.x = nx
             sub.y = ny
+
             new_substances.append(sub)
+
         substances = new_substances
 
-        # --- 화면 렌더링 ---
-        screen.fill(COLOR_BG)
-        for x in range(COLS):
-            for y in range(ROWS):
-                rect = pygame.Rect(
-                    x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE - 1, GRID_SIZE - 1
-                )
-                cell_type = grid[x][y]
-                if distance_map[x][y] != float("inf") and cell_type == 0:
-                    pygame.draw.rect(screen, COLOR_BLOOD, rect)
-                elif cell_type == 1:
-                    pygame.draw.rect(screen, COLOR_CELL, rect)
-                elif cell_type == 2:
-                    pygame.draw.rect(screen, COLOR_SPAWNER, rect)
-                elif cell_type == 3:
-                    pygame.draw.rect(screen, COLOR_DESPAWNER, rect)
-                elif cell_type == 4:
-                    pygame.draw.rect(screen, COLOR_PUMP, rect)
-                else:
-                    pygame.draw.rect(screen, COLOR_GRID, rect, 1)
+        # ---------------------------------------------
+        # 렌더링
+        # ---------------------------------------------
 
-        for sub in substances:
-            center = (
-                sub.x * GRID_SIZE + GRID_SIZE // 2,
-                sub.y * GRID_SIZE + GRID_SIZE // 2,
-            )
-            pygame.draw.circle(screen, COLOR_SUBSTANCE, center, GRID_SIZE // 3)
-        pygame.display.flip()
+        draw_world(
+            screen,
+            grid,
+            distance_map,
+            active_pump_map,
+            substances,
+        )
 
     pygame.quit()
 
