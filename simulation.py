@@ -1,4 +1,6 @@
 from collections import deque
+import json
+from pathlib import Path
 import random
 import pygame
 
@@ -8,15 +10,16 @@ GRID_SIZE = 20  # 각 그리드 칸의 픽셀 크기
 COLS = WIDTH // GRID_SIZE
 ROWS = HEIGHT // GRID_SIZE
 FPS = 30
+
 # 색상 정의 (RGB)
 COLOR_BG = (20, 20, 20)  # 혈관 바깥 조직 배경
 COLOR_BLOOD = (60, 25, 25)  # 혈액이 흐르는 내부 공간 (어두운 붉은빛)
 COLOR_GRID = (40, 40, 40)
 COLOR_CELL = (100, 100, 120)  # 세포 (벽)
 COLOR_SPAWNER = (46, 204, 113)  # 스포너 (입구)
-COLOR_DESPAWNER = (231, 76, 60)  # 디스파워너 (출구 다중 차단)
+COLOR_DESPAWNER = (231, 76, 60)  # 디스파워너 (출구)
 COLOR_SUBSTANCE = (52, 152, 219)  # 수용성 물질
-# 8방향 이동을 위한 오프셋 목록 (자기 자신 포함 9칸 탐색용)
+
 DIRECTIONS_8 = [
     (-1, -1),
     (0, -1),
@@ -32,91 +35,63 @@ DIRECTIONS_4 = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
 
 class Substance:
+
     def __init__(self, x, y):
         self.x = x
         self.y = y
 
 
+def load_map_from_json():
+    """같은 폴더의 map.json 파일을 불러옵니다."""
+    path = Path(__file__).resolve().parent / "map.json"
+    if path.exists():
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("grid")
+        except Exception as e:
+            print(f"맵 로드 중 오류 발생: {e}")
+    return None
+
+
 def run_simulation():
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption("Glomerulus and Capillary Simulation")
+    pygame.display.set_caption("Glomerulus and Capillary Simulation (Loaded Map)")
     clock = pygame.time.Clock()
-    # 그리드 초기화 (0: 빈 공간, 1: 세포막, 2: 스포너, 3: 디스파워너)
-    grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
-    # --- 구조물 배치 설정 ---
-    # 혈관 입구를 화면 맨 왼쪽에 두어 사용 가능한 가로 공간을 늘린다.
-    start_x, end_x = 0, COLS - 1
-    exit_x = end_x - 1  # despawner 오른쪽에 외벽 한 칸을 남긴다.
 
-    # 위쪽 벽을 훨씬 두껍게 만들기 위해 channel_top과 first_wall_top을 위쪽으로 확장 (예: 3)
-    channel_top, channel_bottom = 3, 16
-    first_vessel_top, first_vessel_bottom = 9, 13
-    first_wall_top, first_wall_bottom = 3, 16
-    first_wall_thickness = 3
+    # 1. 맵 파일 불러오기 시도
+    grid = load_map_from_json()
 
-    # 일반 모세혈관의 내강은 2칸 높이(y=11, 12)이며,
-    # 위쪽 벽은 유지하고 아래쪽 벽은 한 칸(y=13)만 남긴다.
-    vessel_top_y, vessel_bottom_y = 11, 12
-    thin_start_x, thin_end_x = 16, 26  # 토리 역할을 하는 직선·1칸 내강 구간
-    glomerulus_y = 12
-    lower_wall_y = glomerulus_y + 1
+    # 만약 map.json이 없다면 기본 빈 맵 생성
+    if grid is None:
+        print("map.json을 찾을 수 없어 빈 맵으로 시작합니다.")
+        grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
 
-    for x in range(start_x, exit_x + 1):
-        if x < thin_start_x:
-            # 첫 번째 혈관: 위쪽 벽을 두껍게 확장
-            for y in range(first_wall_top, first_wall_bottom + 1):
-                grid[x][y] = 1
-            for y in range(first_vessel_top, first_vessel_bottom + 1):
-                grid[x][y] = 0
-            continue
-
-        # 우선 혈관 구조물 구역을 벽으로 채운다.
-        for y in range(channel_top, channel_bottom + 1):
-            grid[x][y] = 1
-        # 일반 모세혈관: 2칸 높이의 내강.
-        if not (thin_start_x <= x < thin_end_x):
-            grid[x][vessel_top_y] = 0
-            grid[x][vessel_bottom_y] = 0
-            grid[x][lower_wall_y] = 1
-            for y in range(lower_wall_y + 1, channel_bottom + 1):
-                grid[x][y] = 0
-        else:
-            # 토리 구간: 직선이며 내강은 1칸 높이.
-            # 아래쪽 벽은 y=13 한 칸만 남겨 물질 이동을 관찰할 수 있게 한다.
-            grid[x][glomerulus_y] = 0
-            grid[x][lower_wall_y] = 1
-            for y in range(lower_wall_y + 1, channel_bottom + 1):
-                grid[x][y] = 0
-
-    # 토리 구간도 두꺼워진 위쪽 벽 유지
-    for x in range(thin_start_x, thin_end_x):
-        for y in range(channel_top, vessel_top_y):
-            grid[x][y] = 1
-        # 내강 바로 아래 벽 한 칸만 유지
-        grid[x][lower_wall_y] = 1
-        for y in range(lower_wall_y + 1, channel_bottom + 1):
-            grid[x][y] = 0
-
-    spawner_y = vessel_top_y
-    spawner_pos = (start_x, spawner_y)
-    grid[start_x][spawner_y] = 2
-
-    # 화면 맨 오른쪽 열은 외벽으로 채우고, despawner는 그 바로 왼쪽에 둔다.
-    for y in range(channel_top, channel_bottom + 1):
-        grid[end_x][y] = 1
+    # 2. 불러온 맵에서 스포너(2)와 디스파워너(3) 위치 동적 탐색
+    spawner_pos = None
     despawner_coords = []
-    for y in (vessel_top_y, vessel_bottom_y):
-        grid[exit_x][y] = 3
-        despawner_coords.append((exit_x, y))
+
+    for x in range(COLS):
+        for y in range(ROWS):
+            if grid[x][y] == 2:
+                spawner_pos = (x, y)
+            elif grid[x][y] == 3:
+                despawner_coords.append((x, y))
+
+    # 스포너가 정의되지 않은 경우 기본 위치 지정
+    if not spawner_pos:
+        spawner_pos = (0, ROWS // 2)
 
     # --- BFS를 이용한 자동 유선(Flow Field) 계산 ---
     flow_field = [[(0, 0) for _ in range(ROWS)] for _ in range(COLS)]
     distance_map = [[float("inf") for _ in range(ROWS)] for _ in range(COLS)]
     queue = deque()
+
     for dx, dy in despawner_coords:
         distance_map[dx][dy] = 0
         queue.append((dx, dy))
+
     while queue:
         cx, cy = queue.popleft()
         current_dist = distance_map[cx][cy]
@@ -144,13 +119,17 @@ def run_simulation():
     substances = []
     running = True
     frame_count = 0
+
     while running:
         clock.tick(FPS)
         frame_count += 1
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-        if frame_count % 8 == 0:
+
+        # 스포너가 존재할 때만 물질 생성
+        if spawner_pos and frame_count % 8 == 0:
             substances.append(Substance(spawner_pos[0], spawner_pos[1]))
 
         # --- 1단계: 현재 프레임의 물질 위치 맵 구성 ---
@@ -161,6 +140,7 @@ def run_simulation():
         # --- 2단계: 모든 물질의 미래 이동 위치 계산 ---
         future_positions = []
         cell_pass_probability = 0.2
+
         for sub in substances:
             if grid[sub.x][sub.y] == 3:
                 continue
@@ -169,6 +149,7 @@ def run_simulation():
             fx_dir, fy_dir = flow_field[current_x][current_y]
             neighbor_counts = {}
             total_neighbors = 0
+
             for bdx, bdy in DIRECTIONS_8:
                 nx, ny = current_x + bdx, current_y + bdy
                 if 0 <= nx < COLS and 0 <= ny < ROWS:
