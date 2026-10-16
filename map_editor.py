@@ -3,13 +3,13 @@ from pathlib import Path
 import pygame
 
 GRID_SIZE = 20
-COLS = 40
-ROWS = 30
+COLS = 100
+ROWS = 100
 PANEL_WIDTH = 260
 FPS = 60
 
-GRID_WIDTH = COLS * GRID_SIZE
-GRID_HEIGHT = ROWS * GRID_SIZE
+GRID_WIDTH = 800
+GRID_HEIGHT = 600
 WINDOW_WIDTH = GRID_WIDTH + PANEL_WIDTH
 WINDOW_HEIGHT = GRID_HEIGHT
 
@@ -20,7 +20,7 @@ COLORS = {
     3: (231, 76, 60),  # 출구
     4: (155, 89, 182),  # 일반 펌프
     5: (241, 196, 15),  # 능동수송 펌프
-    6: (70, 70, 80),  # 단단한 벽 추가
+    6: (70, 70, 80),  # 단단한 벽
 }
 
 LABELS = {
@@ -82,31 +82,40 @@ def in_bounds(x, y):
     return 0 <= x < COLS and 0 <= y < ROWS
 
 
-def draw_direction_triangle(screen, x, y, direction):
+def draw_direction_triangle(screen, rx, ry, size, direction):
     dx, dy = DIRECTIONS[direction]
-    cx = x * GRID_SIZE + GRID_SIZE // 2
-    cy = y * GRID_SIZE + GRID_SIZE // 2
-    tip = (cx + dx * 7, cy + dy * 7)
+    cx = rx + size // 2
+    cy = ry + size // 2
+    tip = (cx + dx * (size // 4), cy + dy * (size // 4))
     px = -dy
     py = dx
-    base_x = cx - dx * 4
-    base_y = cy - dy * 4
-    left = (base_x + px * 5, base_y + py * 5)
-    right = (base_x - px * 5, base_y - py * 5)
+    base_x = cx - dx * (size // 6)
+    base_y = cy - dy * (size // 6)
+    offset = size // 4
+    left = (base_x + px * offset, base_y + py * offset)
+    right = (base_x - px * offset, base_y - py * offset)
     pygame.draw.polygon(screen, (45, 45, 45), [tip, left, right])
 
 
 def load_map():
     path = Path(__file__).resolve().parent / "map.json"
     if not path.exists():
-        return None, {}, "map.json 없음"
+        return (
+            [[1 for _ in range(ROWS)] for _ in range(COLS)],
+            {},
+            "map.json 없음 (새 맵 생성)",
+        )
 
     try:
         with path.open("r", encoding="utf-8") as file:
             data = json.load(file)
 
         if data.get("cols") != COLS or data.get("rows") != ROWS or "grid" not in data:
-            return None, {}, "맵 크기가 일치하지 않습니다."
+            return (
+                [[1 for _ in range(ROWS)] for _ in range(COLS)],
+                {},
+                "규격이 일치하지 않아 새 맵을 생성했습니다.",
+            )
 
         grid = data["grid"]
         if (
@@ -116,13 +125,20 @@ def load_map():
                 isinstance(column, list) and len(column) == ROWS for column in grid
             )
         ):
-            return None, {}, "맵 데이터 형식이 올바르지 않습니다."
+            return (
+                [[1 for _ in range(ROWS)] for _ in range(COLS)],
+                {},
+                "데이터 형식 오류로 새 맵을 생성했습니다.",
+            )
 
-        # 타일 값 유효성 검사 (0~6 범위 허용)
         for x in range(COLS):
             for y in range(ROWS):
                 if grid[x][y] not in range(7):
-                    return None, {}, "잘못된 타일 값이 포함되어 있습니다."
+                    return (
+                        [[1 for _ in range(ROWS)] for _ in range(COLS)],
+                        {},
+                        "잘못된 값이 포함되어 새 맵을 생성했습니다.",
+                    )
 
         active_pump_directions = {}
         for item in data.get("active_pumps", []):
@@ -137,8 +153,12 @@ def load_map():
 
         return grid, active_pump_directions, f"불러오기 완료: {path.name}"
 
-    except Exception as exc:
-        return None, {}, f"불러오기 실패: {exc}"
+    except Exception:
+        return (
+            [[1 for _ in range(ROWS)] for _ in range(COLS)],
+            {},
+            "불러오기 실패로 새 맵을 생성했습니다.",
+        )
 
 
 def save_map(grid, active_pump_directions):
@@ -197,14 +217,18 @@ def main():
         grid = loaded_grid
         active_pump_directions = loaded_directions
     else:
-        grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
+        grid = [[1 for _ in range(ROWS)] for _ in range(COLS)]
         active_pump_directions = {}
+
+    # 카메라 및 줌 설정
+    grid_size = float(GRID_SIZE)
+    camera_x = 0.0
+    camera_y = 0.0
 
     panel_x = GRID_WIDTH
     margin = 12
     button_w = PANEL_WIDTH - margin * 2
 
-    # 7개의 팔레트 항목(0~6)이 깔끔하게 들어가도록 높이 및 간격 최적화
     palette_rects = {
         value: pygame.Rect(
             panel_x + margin,
@@ -215,7 +239,6 @@ def main():
         for value in range(7)
     }
 
-    # 펌프 방향 버튼 레이아웃
     direction_rects = {
         "up": pygame.Rect(panel_x + margin + 57, 260, 48, 25),
         "left": pygame.Rect(panel_x + margin, 288, 74, 25),
@@ -233,6 +256,10 @@ def main():
     paint_value = 1
     last_painted_cell = None
 
+    # 마우스 휠 패닝(이동) 상태 변수
+    panning = False
+    pan_start_pos = (0, 0)
+
     status = init_status
     status_color = (100, 230, 150) if "완료" in init_status else MUTED
     status_expiry = pygame.time.get_ticks() + 3000
@@ -246,12 +273,19 @@ def main():
     def draw_text(text, x, y, font, color=TEXT):
         screen.blit(font.render(text, True, color), (x, y))
 
-    def paint_at(pos, value):
-        mx, my = pos
+    def screen_to_grid(mx, my):
         if not (0 <= mx < GRID_WIDTH and 0 <= my < GRID_HEIGHT):
             return None
+        gx = int((mx - camera_x) // grid_size)
+        gy = int((my - camera_y) // grid_size)
+        if in_bounds(gx, gy):
+            return gx, gy
+        return None
 
-        cell = (mx // GRID_SIZE, my // GRID_SIZE)
+    def paint_at(pos, value):
+        cell = screen_to_grid(*pos)
+        if cell is None:
+            return None
         if cell == last_painted_cell:
             return None
 
@@ -290,10 +324,30 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
 
+            elif event.type == pygame.MOUSEWHEEL:
+                mx, my = pygame.mouse.get_pos()
+                if 0 <= mx < GRID_WIDTH and 0 <= my < GRID_HEIGHT:
+                    old_grid_size = grid_size
+                    if event.y > 0:
+                        grid_size = min(60.0, grid_size + 2.0)
+                    elif event.y < 0:
+                        grid_size = max(5.0, grid_size - 2.0)
+
+                    world_x = (mx - camera_x) / old_grid_size
+                    world_y = (my - camera_y) / old_grid_size
+                    camera_x = mx - world_x * grid_size
+                    camera_y = my - world_y * grid_size
+
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 mx, my = event.pos
 
-                if event.button == 1:
+                # 마우스 휠 클릭 (가운데 버튼, 보통 event.button == 2)
+                if event.button == 2:
+                    if 0 <= mx < GRID_WIDTH and 0 <= my < GRID_HEIGHT:
+                        panning = True
+                        pan_start_pos = event.pos
+
+                elif event.button == 1:
                     selected_palette = None
                     for value, rect in palette_rects.items():
                         if rect.collidepoint(event.pos):
@@ -315,10 +369,10 @@ def main():
                         last_painted_cell = None
 
                     elif clear_rect.collidepoint(event.pos):
-                        grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
+                        grid = [[1 for _ in range(ROWS)] for _ in range(COLS)]
                         active_pump_directions.clear()
                         selected_pump = None
-                        set_status("맵 초기화 완료")
+                        set_status("맵 초기화 완료 (세포막으로 채워짐)")
                         mouse_painting = False
                         last_painted_cell = None
 
@@ -334,29 +388,28 @@ def main():
                             mouse_painting = False
                             last_painted_cell = None
 
-                        elif 0 <= mx < GRID_WIDTH and 0 <= my < GRID_HEIGHT:
-                            x = mx // GRID_SIZE
-                            y = my // GRID_SIZE
-
-                            if grid[x][y] == 5:
-                                selected_pump = (x, y)
-
-                            mouse_painting = True
-                            paint_value = selected_value
-                            last_painted_cell = None
-
-                            cell = paint_at(event.pos, paint_value)
+                        else:
+                            cell = screen_to_grid(mx, my)
                             if cell is not None:
-                                last_painted_cell = cell
+                                x, y = cell
+                                if grid[x][y] == 5:
+                                    selected_pump = (x, y)
 
-                            if grid[x][y] == 5:
-                                selected_pump = (x, y)
+                                mouse_painting = True
+                                paint_value = selected_value
+                                last_painted_cell = None
+
+                                painted_cell = paint_at(event.pos, paint_value)
+                                if painted_cell is not None:
+                                    last_painted_cell = painted_cell
+
+                                if grid[x][y] == 5:
+                                    selected_pump = (x, y)
 
                 elif event.button == 3:
-                    if 0 <= mx < GRID_WIDTH and 0 <= my < GRID_HEIGHT:
-                        x = mx // GRID_SIZE
-                        y = my // GRID_SIZE
-
+                    cell = screen_to_grid(mx, my)
+                    if cell is not None:
+                        x, y = cell
                         if grid[x][y] == 5:
                             active_pump_directions.pop((x, y), None)
 
@@ -368,37 +421,58 @@ def main():
                         paint_value = 0
                         last_painted_cell = (x, y)
 
-            elif event.type == pygame.MOUSEMOTION and mouse_painting:
-                cell = paint_at(event.pos, paint_value)
-                if cell is not None:
-                    last_painted_cell = cell
-                    x, y = cell
-                    if grid[x][y] == 5:
-                        selected_pump = (x, y)
-                    elif selected_pump == (x, y):
-                        selected_pump = None
+            elif event.type == pygame.MOUSEMOTION:
+                if panning:
+                    mx, my = event.pos
+                    dx = mx - pan_start_pos[0]
+                    dy = my - pan_start_pos[1]
+                    camera_x += dx
+                    camera_y += dy
+                    pan_start_pos = (mx, my)
+                elif mouse_painting:
+                    cell = paint_at(event.pos, paint_value)
+                    if cell is not None:
+                        last_painted_cell = cell
+                        x, y = cell
+                        if grid[x][y] == 5:
+                            selected_pump = (x, y)
+                        elif selected_pump == (x, y):
+                            selected_pump = None
 
-            elif event.type == pygame.MOUSEBUTTONUP and event.button in (1, 3):
-                mouse_painting = False
-                last_painted_cell = None
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 2:
+                    panning = False
+                elif event.button in (1, 3):
+                    mouse_painting = False
+                    last_painted_cell = None
 
         # 렌더링
         screen.fill(BG)
 
         for x in range(COLS):
             for y in range(ROWS):
-                value = grid[x][y]
+                rx = camera_x + x * grid_size
+                ry = camera_y + y * grid_size
+
+                if (
+                    rx + grid_size < 0
+                    or rx > GRID_WIDTH
+                    or ry + grid_size < 0
+                    or ry > GRID_HEIGHT
+                ):
+                    continue
+
                 rect = pygame.Rect(
-                    x * GRID_SIZE,
-                    y * GRID_SIZE,
-                    GRID_SIZE,
-                    GRID_SIZE,
+                    int(rx), int(ry), int(grid_size) + 1, int(grid_size) + 1
                 )
+                value = grid[x][y]
                 screen.fill(COLORS[value], rect)
 
                 if value == 5:
                     direction = active_pump_directions.get((x, y), "right")
-                    draw_direction_triangle(screen, x, y, direction)
+                    draw_direction_triangle(
+                        screen, int(rx), int(ry), int(grid_size), direction
+                    )
 
                 pygame.draw.rect(screen, GRID_LINE, rect, 1)
 
@@ -418,7 +492,6 @@ def main():
 
         mouse_pos = pygame.mouse.get_pos()
 
-        # 팔레트 항목 그리기
         for value, rect in palette_rects.items():
             pygame.draw.rect(screen, COLORS[value], rect, border_radius=4)
             if value == selected_value:
@@ -438,9 +511,8 @@ def main():
         if selected_pump is not None:
             sx, sy = selected_pump
             if grid[sx][sy] == 5:
-                direction = active_pump_directions.get((sx, sy), "right")
                 draw_text(
-                    f"선택: ({sx}, {sy})", panel_x + margin, 240, small_font, MUTED
+                    f"선택: ({sx}, {sy})", panel_x + margin, 260, small_font, MUTED
                 )
             else:
                 selected_pump = None
@@ -476,10 +548,14 @@ def main():
 
         draw_text("좌클릭: 배치 / 선택", panel_x + margin, 445, small_font, MUTED)
         draw_text("우클릭: 지우기", panel_x + margin, 465, small_font, MUTED)
+        draw_text("휠클릭 드래그: 화면 이동", panel_x + margin, 485, small_font, MUTED)
+        draw_text(
+            "스크롤: 마우스 중심 확대/축소", panel_x + margin, 505, small_font, MUTED
+        )
 
         if pygame.time.get_ticks() < status_expiry:
             rendered = small_font.render(status, True, status_color)
-            screen.blit(rendered, (panel_x + margin, 500))
+            screen.blit(rendered, (panel_x + margin, 535))
 
         pygame.display.flip()
 

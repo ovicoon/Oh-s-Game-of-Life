@@ -9,9 +9,9 @@ import pygame
 # =========================================================
 
 WIDTH, HEIGHT = 800, 600
-GRID_SIZE = 20
-COLS = WIDTH // GRID_SIZE
-ROWS = HEIGHT // GRID_SIZE
+GRID_SIZE = 20  # 기본 그리드 크기 (줌에 따라 변경됨)
+COLS = 100
+ROWS = 100
 FPS = 30
 
 # 색상
@@ -23,7 +23,7 @@ COLOR_SPAWNER = (46, 204, 113)
 COLOR_DESPAWNER = (231, 76, 60)
 COLOR_PUMP = (155, 89, 182)
 COLOR_ACTIVE_PUMP = (241, 196, 15)
-COLOR_SOLID_WALL = (70, 70, 80)  # 완전한 벽 색상 (진한 회색)
+COLOR_SOLID_WALL = (70, 70, 80)
 
 # 물질별 색상 구분
 COLOR_SODIUM = (241, 196, 15)  # 나트륨 (노란색)
@@ -36,7 +36,6 @@ DIRECTIONS_4 = [
     (0, 1),
 ]
 
-# JSON 방향 문자열 -> 좌표 변화량
 DIRECTION_MAP = {
     "left": (-1, 0),
     "right": (1, 0),
@@ -51,15 +50,9 @@ DIRECTION_LABELS = {
     "down": "아래쪽",
 }
 
-# 방향 정보가 없는 능동수송 펌프의 기본 방향
 DEFAULT_ACTIVE_PUMP_DIRECTION = "right"
-
-# 벽을 통과할 확률 (타일 1: 세포막)
 CELL_PASS_PROBABILITY = 0.2
-
-# 생성 주기
 SPAWN_INTERVAL = 8
-
 SPAWN_PER_INTERVAL = (10, 30)  # (포도당, 나트륨) 비율
 
 
@@ -119,7 +112,6 @@ def load_map_from_json():
             print("map.json의 grid 데이터 형식이 잘못되었습니다.")
             return None, []
 
-        # 타일 값 검증 (0 ~ 6 허용)
         for x in range(COLS):
             for y in range(ROWS):
                 if (
@@ -131,12 +123,11 @@ def load_map_from_json():
                     return None, []
 
         settings = data.get("active_pumps", [])
-
         if not isinstance(settings, list):
             print("active_pumps는 배열이어야 합니다.")
             return None, []
 
-        print(f"맵 로드 완료: {path.name}")
+        print(f"맵 로드 완료: {path.name} (크기: {COLS}x{ROWS})")
         return grid, settings
 
     except (OSError, json.JSONDecodeError) as exc:
@@ -164,13 +155,8 @@ def load_active_pumps(grid, settings):
                 or isinstance(y, bool)
             ):
                 continue
-
-            if not in_bounds(x, y):
+            if not in_bounds(x, y) or grid[x][y] != 5:
                 continue
-
-            if grid[x][y] != 5:
-                continue
-
             if not isinstance(direction, str):
                 continue
 
@@ -183,15 +169,12 @@ def load_active_pumps(grid, settings):
             pass
 
     active_pumps = []
-
     for x in range(COLS):
         for y in range(ROWS):
             if grid[x][y] != 5:
                 continue
-
             direction = directions_by_position.get(
-                (x, y),
-                DEFAULT_ACTIVE_PUMP_DIRECTION,
+                (x, y), DEFAULT_ACTIVE_PUMP_DIRECTION
             )
             active_pumps.append(ActivePump(x, y, direction))
 
@@ -224,8 +207,6 @@ def build_flow_field(grid, despawner_coords):
 
             if not in_bounds(nx, ny):
                 continue
-
-            # 타일 1(세포벽)과 타일 6(완전한 벽)은 BFS 길찾기에서 통과 불가
             if grid[nx][ny] == 1 or grid[nx][ny] == 6:
                 continue
 
@@ -259,20 +240,22 @@ def build_flow_field(grid, despawner_coords):
 
 
 # =========================================================
-# 렌더링
+# 렌더링 (카메라 및 줌 반영)
 # =========================================================
 
 
-def draw_direction_triangle(screen, x, y, dx, dy):
-    cx = x * GRID_SIZE + GRID_SIZE // 2
-    cy = y * GRID_SIZE + GRID_SIZE // 2
-    tip = (cx + dx * 7, cy + dy * 7)
+def draw_direction_triangle(screen, x, y, dx, dy, camera_x, camera_y, grid_size):
+    cx = camera_x + x * grid_size + grid_size / 2
+    cy = camera_y + y * grid_size + grid_size / 2
+
+    scale = grid_size / 20.0
+    tip = (cx + dx * 7 * scale, cy + dy * 7 * scale)
     px = -dy
     py = dx
-    base_x = cx - dx * 4
-    base_y = cy - dy * 4
-    left = (base_x + px * 5, base_y + py * 5)
-    right = (base_x - px * 5, base_y - py * 5)
+    base_x = cx - dx * 4 * scale
+    base_y = cy - dy * 4 * scale
+    left = (base_x + px * 5 * scale, base_y + py * 5 * scale)
+    right = (base_x - px * 5 * scale, base_y - py * 5 * scale)
 
     pygame.draw.polygon(screen, (40, 40, 40), [tip, left, right])
 
@@ -283,17 +266,27 @@ def draw_world(
     distance_map,
     active_pump_map,
     substances,
-    show_sodium=True,
+    show_sodium,
+    camera_x,
+    camera_y,
+    grid_size,
 ):
     screen.fill(COLOR_BG)
 
     for x in range(COLS):
         for y in range(ROWS):
+            rx = camera_x + x * grid_size
+            ry = camera_y + y * grid_size
+
+            # 화면 밖 영역 컬링(최적화)
+            if rx + grid_size < 0 or rx > WIDTH or ry + grid_size < 0 or ry > HEIGHT:
+                continue
+
             rect = pygame.Rect(
-                x * GRID_SIZE,
-                y * GRID_SIZE,
-                GRID_SIZE - 1,
-                GRID_SIZE - 1,
+                int(rx),
+                int(ry),
+                int(grid_size) + 1,
+                int(grid_size) + 1,
             )
             cell_type = grid[x][y]
 
@@ -311,23 +304,31 @@ def draw_world(
                 pygame.draw.rect(screen, COLOR_ACTIVE_PUMP, rect)
                 pump = active_pump_map.get((x, y))
                 if pump is not None:
-                    draw_direction_triangle(screen, x, y, pump.dx, pump.dy)
+                    draw_direction_triangle(
+                        screen, x, y, pump.dx, pump.dy, camera_x, camera_y, grid_size
+                    )
             elif cell_type == 6:
                 pygame.draw.rect(screen, COLOR_SOLID_WALL, rect)
             else:
                 pygame.draw.rect(screen, COLOR_GRID, rect, 1)
 
     for sub in substances:
-        # 나트륨 숨기기 옵션 적용
         if sub.sub_type == "sodium" and not show_sodium:
             continue
 
+        rx = camera_x + sub.x * grid_size
+        ry = camera_y + sub.y * grid_size
+
+        if rx + grid_size < 0 or rx > WIDTH or ry + grid_size < 0 or ry > HEIGHT:
+            continue
+
         center = (
-            sub.x * GRID_SIZE + GRID_SIZE // 2,
-            sub.y * GRID_SIZE + GRID_SIZE // 2,
+            int(rx + grid_size / 2),
+            int(ry + grid_size / 2),
         )
         color = COLOR_SODIUM if sub.sub_type == "sodium" else COLOR_GLUCOSE
-        pygame.draw.circle(screen, color, center, GRID_SIZE // 3)
+        radius = max(2, int(grid_size // 3))
+        pygame.draw.circle(screen, color, center, radius)
 
     pygame.display.flip()
 
@@ -340,13 +341,11 @@ def draw_world(
 def can_normal_pass(grid, x, y):
     if not in_bounds(x, y):
         return False
-
     cell_type = grid[x][y]
     if cell_type == 6:
-        return False  # 타일 6(완전한 벽): 절대 통과 불가
+        return False
     if cell_type == 1:
-        return random.random() < CELL_PASS_PROBABILITY  # 타일 1(세포막): 20% 확률 통과
-
+        return random.random() < CELL_PASS_PROBABILITY
     return True
 
 
@@ -401,7 +400,6 @@ def move_substance(
 
     flow_dx, flow_dy = flow_field[x][y]
 
-    # 주변 밀집도 계산 (같은 물질끼리만 카운트)
     neighbor_counts = {}
     total_neighbors = 0
 
@@ -508,7 +506,9 @@ def move_substance(
 def run_simulation():
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption("SGLT Simulation (H: 나트륨 토글)")
+    pygame.display.set_caption(
+        "SGLT Simulation (H: 나트륨 토글 / 휠: 줌 / 마우스 가운데 버튼: 패닝)"
+    )
     clock = pygame.time.Clock()
 
     grid, active_pump_settings = load_map_from_json()
@@ -550,7 +550,14 @@ def run_simulation():
     substances = []
     frame_count = 0
     running = True
-    show_sodium = True  # 나트륨 표시 기본값
+    show_sodium = True
+
+    # 카메라 및 줌 상태 변수
+    grid_size = 15.0  # 100x100 크기가 한눈에 잘 보이도록 기본 크기 설정
+    camera_x = 0.0
+    camera_y = 0.0
+    panning = False
+    pan_start_pos = (0, 0)
 
     while running:
         clock.tick(FPS)
@@ -559,11 +566,47 @@ def run_simulation():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+
             elif event.type == pygame.KEYDOWN:
-                # H 키를 누르면 나트륨 표시 여부 토글
                 if event.key == pygame.K_h:
                     show_sodium = not show_sodium
                     print(f"나트륨 표시: {show_sodium}")
+
+            # 줌 (마우스 스크롤)
+            elif event.type == pygame.MOUSEWHEEL:
+                mx, my = pygame.mouse.get_pos()
+                old_grid_size = grid_size
+                if event.y > 0:
+                    grid_size = min(60.0, grid_size + 2.0)
+                elif event.y < 0:
+                    grid_size = max(5.0, grid_size - 2.0)
+
+                # 마우스 커서 위치를 기준으로 줌인/줌아웃
+                world_x = (mx - camera_x) / old_grid_size
+                world_y = (my - camera_y) / old_grid_size
+                camera_x = mx - world_x * grid_size
+                camera_y = my - world_y * grid_size
+
+            # 패닝 시작 (마우스 휠 버튼 / 가운데 버튼)
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 2:
+                    panning = True
+                    pan_start_pos = event.pos
+
+            # 패닝 종료
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 2:
+                    panning = False
+
+            # 패닝 드래그 중 이동
+            elif event.type == pygame.MOUSEMOTION:
+                if panning:
+                    mx, my = event.pos
+                    dx = mx - pan_start_pos[0]
+                    dy = my - pan_start_pos[1]
+                    camera_x += dx
+                    camera_y += dy
+                    pan_start_pos = (mx, my)
 
         if frame_count % SPAWN_INTERVAL == 0:
             for sx, sy in spawner_coords:
@@ -608,6 +651,9 @@ def run_simulation():
             active_pump_map,
             substances,
             show_sodium,
+            camera_x,
+            camera_y,
+            grid_size,
         )
 
     pygame.quit()
