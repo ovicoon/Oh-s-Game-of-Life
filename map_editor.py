@@ -13,24 +13,28 @@ GRID_HEIGHT = 600
 WINDOW_WIDTH = GRID_WIDTH + PANEL_WIDTH
 WINDOW_HEIGHT = GRID_HEIGHT
 
+# 타일별 색상 (Tile Colors - 0 ~ 7)
 COLORS = {
-    0: (35, 35, 35),
-    1: (100, 100, 120),  # 세포막
-    2: (46, 204, 113),  # 생성기
-    3: (231, 76, 60),  # 출구
-    4: (155, 89, 182),  # 일반 펌프
-    5: (241, 196, 15),  # 능동수송 펌프
-    6: (70, 70, 80),  # 단단한 벽
+    0: (35, 35, 35),  # Empty
+    1: (100, 100, 120),  # Cell Membrane
+    2: (46, 204, 113),  # Glucose Spawner
+    3: (241, 196, 15),  # Sodium Spawner
+    4: (231, 76, 60),  # Despawner / Exit
+    5: (155, 89, 182),  # Regular Pump
+    6: (52, 152, 219),  # Active Pump
+    7: (70, 70, 80),  # Solid Wall
 }
 
+# 2열 그리드 배치를 위한 라벨 (Labels for 2-column layout)
 LABELS = {
-    0: "0 지우개",
-    1: "1 세포막",
-    2: "2 생성기",
-    3: "3 출구",
-    4: "4 일반 펌프",
-    5: "5 능동수송 펌프",
-    6: "6 단단한 벽",
+    0: "0. Eraser",
+    1: "1. Membrane",
+    2: "2. Glu Spawner",
+    3: "3. Na Spawner",
+    4: "4. Exit",
+    5: "5. Reg Pump",
+    6: "6. Act Pump",
+    7: "7. Solid Wall",
 }
 
 DIRECTIONS = {
@@ -41,10 +45,10 @@ DIRECTIONS = {
 }
 
 DIRECTION_LABELS = {
-    "right": "오른쪽",
-    "left": "왼쪽",
-    "up": "위쪽",
-    "down": "아래쪽",
+    "right": "Right",
+    "left": "Left",
+    "up": "Up",
+    "down": "Down",
 }
 
 BG = (20, 20, 20)
@@ -52,29 +56,9 @@ PANEL_BG = (29, 29, 29)
 GRID_LINE = (65, 65, 65)
 TEXT = (240, 240, 240)
 MUTED = (185, 185, 185)
-BLUE = (52, 152, 219)
-BLUE_HOVER = (41, 128, 185)
-GRAY = (75, 75, 75)
-GRAY_HOVER = (95, 95, 95)
 
 
-def load_korean_font(size, bold=False):
-    installed_fonts = pygame.font.get_fonts()
-    normalized = {
-        name.lower().replace(" ", "").replace("-", ""): name for name in installed_fonts
-    }
-    for candidate in (
-        "malgungothic",
-        "맑은고딕",
-        "applegothic",
-        "notosanscjkr",
-        "notosanskr",
-        "nanumgothic",
-        "gulim",
-        "arialunicodems",
-    ):
-        if candidate in normalized:
-            return pygame.font.SysFont(normalized[candidate], size, bold=bold)
+def load_font(size, bold=False):
     return pygame.font.SysFont(None, size, bold=bold)
 
 
@@ -103,7 +87,7 @@ def load_map():
         return (
             [[1 for _ in range(ROWS)] for _ in range(COLS)],
             {},
-            "map.json 없음 (새 맵 생성)",
+            "map.json not found (New map created)",
         )
 
     try:
@@ -114,30 +98,17 @@ def load_map():
             return (
                 [[1 for _ in range(ROWS)] for _ in range(COLS)],
                 {},
-                "규격이 일치하지 않아 새 맵을 생성했습니다.",
+                "Size mismatch, created new map.",
             )
 
         grid = data["grid"]
-        if (
-            not isinstance(grid, list)
-            or len(grid) != COLS
-            or not all(
-                isinstance(column, list) and len(column) == ROWS for column in grid
-            )
-        ):
-            return (
-                [[1 for _ in range(ROWS)] for _ in range(COLS)],
-                {},
-                "데이터 형식 오류로 새 맵을 생성했습니다.",
-            )
-
         for x in range(COLS):
             for y in range(ROWS):
-                if grid[x][y] not in range(7):
+                if grid[x][y] not in range(8):
                     return (
                         [[1 for _ in range(ROWS)] for _ in range(COLS)],
                         {},
-                        "잘못된 값이 포함되어 새 맵을 생성했습니다.",
+                        "Invalid value found, created new map.",
                     )
 
         active_pump_directions = {}
@@ -146,18 +117,18 @@ def load_map():
                 x = int(item["x"])
                 y = int(item["y"])
                 direction = item["direction"]
-                if in_bounds(x, y) and grid[x][y] == 5 and direction in DIRECTIONS:
+                if in_bounds(x, y) and grid[x][y] == 6 and direction in DIRECTIONS:
                     active_pump_directions[(x, y)] = direction
             except (KeyError, TypeError, ValueError):
                 continue
 
-        return grid, active_pump_directions, f"불러오기 완료: {path.name}"
+        return grid, active_pump_directions, f"Loaded successfully: {path.name}"
 
     except Exception:
         return (
             [[1 for _ in range(ROWS)] for _ in range(COLS)],
             {},
-            "불러오기 실패로 새 맵을 생성했습니다.",
+            "Load failed, created new map.",
         )
 
 
@@ -167,7 +138,7 @@ def save_map(grid, active_pump_directions):
 
     for x in range(COLS):
         for y in range(ROWS):
-            if grid[x][y] != 5:
+            if grid[x][y] != 6:
                 continue
             direction = active_pump_directions.get((x, y), "right")
             active_pumps.append(
@@ -184,13 +155,14 @@ def save_map(grid, active_pump_directions):
         "grid": grid,
         "active_pumps": active_pumps,
         "legend": {
-            "0": "빈 공간",
-            "1": "세포막",
-            "2": "물질 생성기",
-            "3": "출구",
-            "4": "일반 펌프",
-            "5": "능동수송 펌프",
-            "6": "단단한 벽",
+            "0": "Empty",
+            "1": "Cell Membrane",
+            "2": "Glucose Spawner",
+            "3": "Sodium Spawner",
+            "4": "Exit",
+            "5": "Regular Pump",
+            "6": "Active Pump",
+            "7": "Solid Wall",
         },
     }
 
@@ -205,12 +177,11 @@ def main():
     pygame.font.init()
 
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("맵 에디터")
+    pygame.display.set_caption("Oh's Game Of Life - Map Editor")
     clock = pygame.time.Clock()
 
-    title_font = load_korean_font(18, True)
-    body_font = load_korean_font(14)
-    small_font = load_korean_font(12)
+    title_font = load_font(18, True)
+    small_font = load_font(12)
 
     loaded_grid, loaded_directions, init_status = load_map()
     if loaded_grid is not None:
@@ -220,34 +191,34 @@ def main():
         grid = [[1 for _ in range(ROWS)] for _ in range(COLS)]
         active_pump_directions = {}
 
-    # 카메라 및 줌 설정
     grid_size = float(GRID_SIZE)
     camera_x = 0.0
     camera_y = 0.0
 
     panel_x = GRID_WIDTH
-    margin = 12
-    button_w = PANEL_WIDTH - margin * 2
+    margin = 10
+    col_w = (PANEL_WIDTH - margin * 3) // 2  # 2열 배치를 위한 너비
 
-    palette_rects = {
-        value: pygame.Rect(
-            panel_x + margin,
-            45 + value * 29,
-            button_w,
-            25,
-        )
-        for value in range(7)
-    }
+    # 2열 그리드 형태로 팔레트 버튼 생성 (공간 절약)
+    palette_rects = {}
+    for value in range(8):
+        row_idx = value // 2
+        col_idx = value % 2
+        bx = panel_x + margin + col_idx * (col_w + margin)
+        by = 45 + row_idx * 32
+        palette_rects[value] = pygame.Rect(bx, by, col_w, 26)
 
+    # 방향 설정 버튼 영역 조정
+    dir_start_y = 185
     direction_rects = {
-        "up": pygame.Rect(panel_x + margin + 57, 260, 48, 25),
-        "left": pygame.Rect(panel_x + margin, 288, 74, 25),
-        "right": pygame.Rect(panel_x + margin + 82, 288, 74, 25),
-        "down": pygame.Rect(panel_x + margin + 57, 316, 48, 25),
+        "up": pygame.Rect(panel_x + margin + 55, dir_start_y, 55, 25),
+        "left": pygame.Rect(panel_x + margin, dir_start_y + 28, 80, 25),
+        "right": pygame.Rect(panel_x + margin + 85, dir_start_y + 28, 80, 25),
+        "down": pygame.Rect(panel_x + margin + 55, dir_start_y + 56, 55, 25),
     }
 
-    save_rect = pygame.Rect(panel_x + margin, 360, button_w, 32)
-    clear_rect = pygame.Rect(panel_x + margin, 400, button_w, 28)
+    save_rect = pygame.Rect(panel_x + margin, 290, PANEL_WIDTH - margin * 2, 32)
+    clear_rect = pygame.Rect(panel_x + margin, 332, PANEL_WIDTH - margin * 2, 28)
 
     selected_value = 1
     selected_pump = None
@@ -256,12 +227,11 @@ def main():
     paint_value = 1
     last_painted_cell = None
 
-    # 마우스 휠 패닝(이동) 상태 변수
     panning = False
     pan_start_pos = (0, 0)
 
     status = init_status
-    status_color = (100, 230, 150) if "완료" in init_status else MUTED
+    status_color = (100, 230, 150) if "Loaded" in init_status else MUTED
     status_expiry = pygame.time.get_ticks() + 3000
 
     def set_status(message, color=MUTED, duration=2500):
@@ -292,28 +262,28 @@ def main():
         x, y = cell
         old_value = grid[x][y]
 
-        if old_value == 5 and value != 5:
+        if old_value == 6 and value != 6:
             active_pump_directions.pop((x, y), None)
 
         grid[x][y] = value
-        if value == 5:
+        if value == 6:
             active_pump_directions.setdefault((x, y), "right")
 
         return cell
 
     def set_pump_direction(direction):
         if selected_pump is None:
-            set_status("먼저 맵에서 능동수송 펌프를 선택하세요.", (255, 180, 100))
+            set_status("Please select an active pump first.", (255, 180, 100))
             return
 
         x, y = selected_pump
-        if grid[x][y] != 5:
-            set_status("선택한 위치에 능동수송 펌프가 없습니다.")
+        if grid[x][y] != 6:
+            set_status("No active pump at selected position.")
             return
 
         active_pump_directions[(x, y)] = direction
         set_status(
-            f"펌프 ({x}, {y}) 방향: {DIRECTION_LABELS[direction]}", (100, 230, 150)
+            f"Pump ({x}, {y}) Direction: {DIRECTION_LABELS[direction]}", (100, 230, 150)
         )
 
     running = True
@@ -341,7 +311,6 @@ def main():
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 mx, my = event.pos
 
-                # 마우스 휠 클릭 (가운데 버튼, 보통 event.button == 2)
                 if event.button == 2:
                     if 0 <= mx < GRID_WIDTH and 0 <= my < GRID_HEIGHT:
                         panning = True
@@ -362,9 +331,9 @@ def main():
                     elif save_rect.collidepoint(event.pos):
                         try:
                             path = save_map(grid, active_pump_directions)
-                            set_status(f"저장 완료: {path.name}", (100, 230, 150), 3000)
+                            set_status(f"Saved: {path.name}", (100, 230, 150), 3000)
                         except OSError as exc:
-                            set_status(f"저장 실패: {exc}", (255, 130, 120), 3000)
+                            set_status(f"Save failed: {exc}", (255, 130, 120), 3000)
                         mouse_painting = False
                         last_painted_cell = None
 
@@ -372,7 +341,7 @@ def main():
                         grid = [[1 for _ in range(ROWS)] for _ in range(COLS)]
                         active_pump_directions.clear()
                         selected_pump = None
-                        set_status("맵 초기화 완료 (세포막으로 채워짐)")
+                        set_status("Map cleared (Filled with membrane)")
                         mouse_painting = False
                         last_painted_cell = None
 
@@ -392,7 +361,7 @@ def main():
                             cell = screen_to_grid(mx, my)
                             if cell is not None:
                                 x, y = cell
-                                if grid[x][y] == 5:
+                                if grid[x][y] == 6:
                                     selected_pump = (x, y)
 
                                 mouse_painting = True
@@ -403,14 +372,14 @@ def main():
                                 if painted_cell is not None:
                                     last_painted_cell = painted_cell
 
-                                if grid[x][y] == 5:
+                                if grid[x][y] == 6:
                                     selected_pump = (x, y)
 
                 elif event.button == 3:
                     cell = screen_to_grid(mx, my)
                     if cell is not None:
                         x, y = cell
-                        if grid[x][y] == 5:
+                        if grid[x][y] == 6:
                             active_pump_directions.pop((x, y), None)
 
                         grid[x][y] = 0
@@ -434,7 +403,7 @@ def main():
                     if cell is not None:
                         last_painted_cell = cell
                         x, y = cell
-                        if grid[x][y] == 5:
+                        if grid[x][y] == 6:
                             selected_pump = (x, y)
                         elif selected_pump == (x, y):
                             selected_pump = None
@@ -446,7 +415,7 @@ def main():
                     mouse_painting = False
                     last_painted_cell = None
 
-        # 렌더링
+        # 렌더링 (Rendering)
         screen.fill(BG)
 
         for x in range(COLS):
@@ -468,7 +437,7 @@ def main():
                 value = grid[x][y]
                 screen.fill(COLORS[value], rect)
 
-                if value == 5:
+                if value == 6:
                     direction = active_pump_directions.get((x, y), "right")
                     draw_direction_triangle(
                         screen, int(rx), int(ry), int(grid_size), direction
@@ -479,83 +448,47 @@ def main():
                 if selected_pump == (x, y):
                     pygame.draw.rect(screen, (255, 255, 255), rect, 2)
 
-        pygame.draw.rect(
-            screen,
-            PANEL_BG,
-            (panel_x, 0, PANEL_WIDTH, WINDOW_HEIGHT),
-        )
+        pygame.draw.rect(screen, PANEL_BG, (panel_x, 0, PANEL_WIDTH, WINDOW_HEIGHT))
 
-        draw_text("맵 에디터", panel_x + margin, 10, title_font)
+        draw_text("Map Editor", panel_x + margin, 10, title_font)
         draw_text(
-            f"{COLS}x{ROWS}", panel_x + PANEL_WIDTH - margin - 40, 14, small_font, MUTED
+            f"{COLS}x{ROWS}", panel_x + PANEL_WIDTH - margin - 45, 14, small_font, MUTED
         )
 
-        mouse_pos = pygame.mouse.get_pos()
-
+        # 팔레트 버튼 렌더링 (2열 배치)
         for value, rect in palette_rects.items():
-            pygame.draw.rect(screen, COLORS[value], rect, border_radius=4)
-            if value == selected_value:
-                pygame.draw.rect(screen, (255, 255, 255), rect, 2, border_radius=4)
-            else:
-                pygame.draw.rect(screen, GRID_LINE, rect, 1, border_radius=4)
+            is_selected = selected_value == value
+            border_color = (255, 255, 255) if is_selected else (80, 80, 80)
+            pygame.draw.rect(screen, COLORS[value], rect)
+            pygame.draw.rect(screen, border_color, rect, 2 if is_selected else 1)
+            draw_text(LABELS[value], rect.x + 4, rect.y + 6, small_font, TEXT)
 
-            label = body_font.render(
-                LABELS[value],
-                True,
-                (30, 30, 30) if value == 5 else (255, 255, 255),
-            )
-            screen.blit(label, (rect.x + 8, rect.centery - label.get_height() // 2))
-
-        draw_text("능동수송 펌프 방향", panel_x + margin, 240, body_font)
-
-        if selected_pump is not None:
-            sx, sy = selected_pump
-            if grid[sx][sy] == 5:
-                draw_text(
-                    f"선택: ({sx}, {sy})", panel_x + margin, 260, small_font, MUTED
-                )
-            else:
-                selected_pump = None
-
-        for direction, rect in direction_rects.items():
-            color = BLUE_HOVER if rect.collidepoint(mouse_pos) else GRAY
-            pygame.draw.rect(screen, color, rect, border_radius=4)
-            rendered = body_font.render(
-                DIRECTION_LABELS[direction], True, (255, 255, 255)
-            )
-            screen.blit(
-                rendered,
-                (
-                    rect.centerx - rendered.get_width() // 2,
-                    rect.centery - rendered.get_height() // 2,
-                ),
-            )
-
-        for rect, label, base, hover in (
-            (save_rect, "맵 저장", BLUE, BLUE_HOVER),
-            (clear_rect, "맵 초기화", GRAY, GRAY_HOVER),
-        ):
-            color = hover if rect.collidepoint(mouse_pos) else base
-            pygame.draw.rect(screen, color, rect, border_radius=4)
-            rendered = body_font.render(label, True, (255, 255, 255))
-            screen.blit(
-                rendered,
-                (
-                    rect.centerx - rendered.get_width() // 2,
-                    rect.centery - rendered.get_height() // 2,
-                ),
-            )
-
-        draw_text("좌클릭: 배치 / 선택", panel_x + margin, 445, small_font, MUTED)
-        draw_text("우클릭: 지우기", panel_x + margin, 465, small_font, MUTED)
-        draw_text("휠클릭 드래그: 화면 이동", panel_x + margin, 485, small_font, MUTED)
+        # 방향 설정 버튼 렌더링
         draw_text(
-            "스크롤: 마우스 중심 확대/축소", panel_x + margin, 505, small_font, MUTED
+            "Active Pump Direction:",
+            panel_x + margin,
+            dir_start_y - 18,
+            small_font,
+            MUTED,
         )
+        for direction, rect in direction_rects.items():
+            pygame.draw.rect(screen, (60, 60, 70), rect)
+            pygame.draw.rect(screen, (90, 90, 100), rect, 1)
+            draw_text(
+                DIRECTION_LABELS[direction], rect.x + 8, rect.y + 6, small_font, TEXT
+            )
+
+        # 저장 및 초기화 버튼 렌더링
+        pygame.draw.rect(screen, (41, 128, 185), save_rect)
+        draw_text("Save Map", save_rect.x + 65, save_rect.y + 8, title_font, TEXT)
+
+        pygame.draw.rect(screen, (192, 57, 43), clear_rect)
+        draw_text("Clear Map", clear_rect.x + 60, clear_rect.y + 6, title_font, TEXT)
 
         if pygame.time.get_ticks() < status_expiry:
-            rendered = small_font.render(status, True, status_color)
-            screen.blit(rendered, (panel_x + margin, 535))
+            draw_text(
+                status, panel_x + margin, WINDOW_HEIGHT - 30, small_font, status_color
+            )
 
         pygame.display.flip()
 

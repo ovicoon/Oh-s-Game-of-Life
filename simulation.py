@@ -5,28 +5,29 @@ import random
 import pygame
 
 # =========================================================
-# 설정
+# 설정 (Configuration)
 # =========================================================
 
 WIDTH, HEIGHT = 800, 600
-GRID_SIZE = 20  # 기본 그리드 크기 (줌에 따라 변경됨)
+GRID_SIZE = 15.0  # 기본 그리드 크기 (줌에 따라 변경됨)
 COLS = 100
 ROWS = 100
 FPS = 30
 
-# 색상
+# 색상 (Colors)
 COLOR_BG = (20, 20, 20)
 COLOR_BLOOD = (60, 25, 25)
 COLOR_GRID = (40, 40, 40)
 COLOR_CELL = (100, 100, 120)
-COLOR_SPAWNER = (46, 204, 113)
+COLOR_SPAWNER_GLUCOSE = (46, 204, 113)  # 포도당 생성기 (초록색)
+COLOR_SPAWNER_SODIUM = (241, 196, 15)  # 소금 생성기 (노란색)
 COLOR_DESPAWNER = (231, 76, 60)
 COLOR_PUMP = (155, 89, 182)
-COLOR_ACTIVE_PUMP = (241, 196, 15)
+COLOR_ACTIVE_PUMP = (52, 152, 219)
 COLOR_SOLID_WALL = (70, 70, 80)
 
-# 물질별 색상 구분
-COLOR_SODIUM = (241, 196, 15)  # 나트륨 (노란색)
+# 물질별 색상 구분 (Substance Colors)
+COLOR_SODIUM = (241, 196, 15)  # 소금/나트륨 (노란색)
 COLOR_GLUCOSE = (52, 152, 219)  # 포도당 (파란색)
 
 DIRECTIONS_4 = [
@@ -43,21 +44,16 @@ DIRECTION_MAP = {
     "down": (0, 1),
 }
 
-DIRECTION_LABELS = {
-    "left": "왼쪽",
-    "right": "오른쪽",
-    "up": "위쪽",
-    "down": "아래쪽",
-}
-
 DEFAULT_ACTIVE_PUMP_DIRECTION = "right"
 CELL_PASS_PROBABILITY = 0.2
-SPAWN_INTERVAL = 8
-SPAWN_PER_INTERVAL = (10, 30)  # (포도당, 나트륨) 비율
+
+# 생성기 확률 설정 (Spawner Probability Constants)
+SODIUM_SPAWN_PROBABILITY = 0.1
+GLUCOSE_SPAWN_PROBABILITY = 0.1
 
 
 # =========================================================
-# 클래스
+# 클래스 (Classes)
 # =========================================================
 
 
@@ -77,7 +73,7 @@ class ActivePump:
 
 
 # =========================================================
-# 공통 함수
+# 공통 함수 (Common Functions)
 # =========================================================
 
 
@@ -89,7 +85,7 @@ def load_map_from_json():
     path = Path(__file__).resolve().parent / "map.json"
 
     if not path.exists():
-        print("map.json이 없습니다.")
+        print("map.json not found.")
         return None, []
 
     try:
@@ -99,7 +95,7 @@ def load_map_from_json():
         grid = data.get("grid")
 
         if data.get("cols") != COLS or data.get("rows") != ROWS:
-            print(f"맵 크기가 일치하지 않습니다. 필요한 크기: {COLS}x{ROWS}")
+            print(f"Map size mismatch. Required: {COLS}x{ROWS}")
             return None, []
 
         if (
@@ -109,7 +105,7 @@ def load_map_from_json():
                 isinstance(column, list) and len(column) == ROWS for column in grid
             )
         ):
-            print("map.json의 grid 데이터 형식이 잘못되었습니다.")
+            print("Invalid grid data format in map.json.")
             return None, []
 
         for x in range(COLS):
@@ -117,25 +113,25 @@ def load_map_from_json():
                 if (
                     not isinstance(grid[x][y], int)
                     or isinstance(grid[x][y], bool)
-                    or grid[x][y] not in range(7)
+                    or grid[x][y] not in range(8)
                 ):
-                    print(f"잘못된 타일 값: ({x}, {y}) = {grid[x][y]}")
+                    print(f"Invalid tile value: ({x}, {y}) = {grid[x][y]}")
                     return None, []
 
         settings = data.get("active_pumps", [])
         if not isinstance(settings, list):
-            print("active_pumps는 배열이어야 합니다.")
+            print("active_pumps must be an array.")
             return None, []
 
-        print(f"맵 로드 완료: {path.name} (크기: {COLS}x{ROWS})")
+        print(f"Map loaded successfully: {path.name} (Size: {COLS}x{ROWS})")
         return grid, settings
 
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"맵 파일 읽기 실패: {exc}")
+        print(f"Failed to read map file: {exc}")
         return None, []
 
     except Exception as exc:
-        print(f"맵 로드 중 오류 발생: {exc}")
+        print(f"Error loading map: {exc}")
         return None, []
 
 
@@ -155,7 +151,7 @@ def load_active_pumps(grid, settings):
                 or isinstance(y, bool)
             ):
                 continue
-            if not in_bounds(x, y) or grid[x][y] != 5:
+            if not in_bounds(x, y) or grid[x][y] != 6:  # 능동수송 펌프 ID (6)
                 continue
             if not isinstance(direction, str):
                 continue
@@ -171,7 +167,7 @@ def load_active_pumps(grid, settings):
     active_pumps = []
     for x in range(COLS):
         for y in range(ROWS):
-            if grid[x][y] != 5:
+            if grid[x][y] != 6:
                 continue
             direction = directions_by_position.get(
                 (x, y), DEFAULT_ACTIVE_PUMP_DIRECTION
@@ -179,12 +175,12 @@ def load_active_pumps(grid, settings):
             active_pumps.append(ActivePump(x, y, direction))
 
     pump_map = {(pump.x, pump.y): pump for pump in active_pumps}
-    print(f"능동수송 펌프 {len(active_pumps)}개 로드 완료")
+    print(f"Loaded {len(active_pumps)} active pumps.")
     return active_pumps, pump_map
 
 
 # =========================================================
-# BFS 유선 계산
+# BFS 경로 계산 (Flow Field Calculation)
 # =========================================================
 
 
@@ -207,7 +203,7 @@ def build_flow_field(grid, despawner_coords):
 
             if not in_bounds(nx, ny):
                 continue
-            if grid[nx][ny] == 1 or grid[nx][ny] == 6:
+            if grid[nx][ny] == 1 or grid[nx][ny] == 7:  # 세포막 또는 단단한 벽
                 continue
 
             if distance_map[nx][ny] == float("inf"):
@@ -216,7 +212,7 @@ def build_flow_field(grid, despawner_coords):
 
     for x in range(COLS):
         for y in range(ROWS):
-            if grid[x][y] == 1 or grid[x][y] == 6:
+            if grid[x][y] == 1 or grid[x][y] == 7:
                 continue
 
             current_distance = distance_map[x][y]
@@ -240,7 +236,7 @@ def build_flow_field(grid, despawner_coords):
 
 
 # =========================================================
-# 렌더링 (카메라 및 줌 반영)
+# 렌더링 (Rendering)
 # =========================================================
 
 
@@ -278,7 +274,6 @@ def draw_world(
             rx = camera_x + x * grid_size
             ry = camera_y + y * grid_size
 
-            # 화면 밖 영역 컬링(최적화)
             if rx + grid_size < 0 or rx > WIDTH or ry + grid_size < 0 or ry > HEIGHT:
                 continue
 
@@ -295,19 +290,21 @@ def draw_world(
             elif cell_type == 1:
                 pygame.draw.rect(screen, COLOR_CELL, rect)
             elif cell_type == 2:
-                pygame.draw.rect(screen, COLOR_SPAWNER, rect)
+                pygame.draw.rect(screen, COLOR_SPAWNER_GLUCOSE, rect)
             elif cell_type == 3:
-                pygame.draw.rect(screen, COLOR_DESPAWNER, rect)
+                pygame.draw.rect(screen, COLOR_SPAWNER_SODIUM, rect)
             elif cell_type == 4:
-                pygame.draw.rect(screen, COLOR_PUMP, rect)
+                pygame.draw.rect(screen, COLOR_DESPAWNER, rect)
             elif cell_type == 5:
+                pygame.draw.rect(screen, COLOR_PUMP, rect)
+            elif cell_type == 6:
                 pygame.draw.rect(screen, COLOR_ACTIVE_PUMP, rect)
                 pump = active_pump_map.get((x, y))
                 if pump is not None:
                     draw_direction_triangle(
                         screen, x, y, pump.dx, pump.dy, camera_x, camera_y, grid_size
                     )
-            elif cell_type == 6:
+            elif cell_type == 7:
                 pygame.draw.rect(screen, COLOR_SOLID_WALL, rect)
             else:
                 pygame.draw.rect(screen, COLOR_GRID, rect, 1)
@@ -334,7 +331,7 @@ def draw_world(
 
 
 # =========================================================
-# 이동 알고리즘
+# 이동 알고리즘 (Movement Algorithms)
 # =========================================================
 
 
@@ -342,9 +339,9 @@ def can_normal_pass(grid, x, y):
     if not in_bounds(x, y):
         return False
     cell_type = grid[x][y]
-    if cell_type == 6:
+    if cell_type == 7:  # 단단한 벽
         return False
-    if cell_type == 1:
+    if cell_type == 1:  # 세포막
         return random.random() < CELL_PASS_PROBABILITY
     return True
 
@@ -387,7 +384,7 @@ def move_substance(
 ):
     x, y = sub.x, sub.y
 
-    if grid[x][y] == 3:
+    if grid[x][y] == 4:  # 출구(Despawner)
         return x, y, False
 
     nx, ny, used_pump = apply_active_pump_if_overlapping(
@@ -477,7 +474,7 @@ def move_substance(
         if used_pump:
             return nx_p, ny_p, True
 
-    if grid[x][y] == 3:
+    if grid[x][y] == 4:
         return x, y, False
 
     dx, dy = random.choice(DIRECTIONS_4)
@@ -499,41 +496,39 @@ def move_substance(
 
 
 # =========================================================
-# 메인 시뮬레이션
+# 메인 시뮬레이션 (Main Simulation Loop)
 # =========================================================
 
 
 def run_simulation():
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption(
-        "SGLT Simulation (H: 나트륨 토글 / 휠: 줌 / 마우스 가운데 버튼: 패닝)"
-    )
+    pygame.display.set_caption("Oh's Game Of Life")
     clock = pygame.time.Clock()
 
     grid, active_pump_settings = load_map_from_json()
 
     if grid is None:
-        print("빈 맵으로 시작합니다.")
+        print("Starting with an empty map.")
         grid = [[0 for _ in range(ROWS)] for _ in range(COLS)]
         active_pump_settings = []
 
-    spawner_coords = []
+    glucose_spawner_coords = []
+    sodium_spawner_coords = []
     despawner_coords = []
-    pump_coords = []
 
     for x in range(COLS):
         for y in range(ROWS):
             cell_type = grid[x][y]
             if cell_type == 2:
-                spawner_coords.append((x, y))
+                glucose_spawner_coords.append((x, y))
             elif cell_type == 3:
-                despawner_coords.append((x, y))
+                sodium_spawner_coords.append((x, y))
             elif cell_type == 4:
-                pump_coords.append((x, y))
+                despawner_coords.append((x, y))
 
-    if not spawner_coords:
-        spawner_coords.append((0, ROWS // 2))
+    if not glucose_spawner_coords and not sodium_spawner_coords:
+        glucose_spawner_coords.append((0, ROWS // 2))
 
     if not despawner_coords:
         despawner_coords.append((COLS - 1, ROWS // 2))
@@ -548,12 +543,10 @@ def run_simulation():
     )
 
     substances = []
-    frame_count = 0
     running = True
     show_sodium = True
 
-    # 카메라 및 줌 상태 변수
-    grid_size = 15.0  # 100x100 크기가 한눈에 잘 보이도록 기본 크기 설정
+    grid_size = 15.0
     camera_x = 0.0
     camera_y = 0.0
     panning = False
@@ -561,7 +554,6 @@ def run_simulation():
 
     while running:
         clock.tick(FPS)
-        frame_count += 1
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -570,9 +562,8 @@ def run_simulation():
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_h:
                     show_sodium = not show_sodium
-                    print(f"나트륨 표시: {show_sodium}")
+                    print(f"Sodium Visible: {show_sodium}")
 
-            # 줌 (마우스 스크롤)
             elif event.type == pygame.MOUSEWHEEL:
                 mx, my = pygame.mouse.get_pos()
                 old_grid_size = grid_size
@@ -581,24 +572,20 @@ def run_simulation():
                 elif event.y < 0:
                     grid_size = max(5.0, grid_size - 2.0)
 
-                # 마우스 커서 위치를 기준으로 줌인/줌아웃
                 world_x = (mx - camera_x) / old_grid_size
                 world_y = (my - camera_y) / old_grid_size
                 camera_x = mx - world_x * grid_size
                 camera_y = my - world_y * grid_size
 
-            # 패닝 시작 (마우스 휠 버튼 / 가운데 버튼)
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 2:
                     panning = True
                     pan_start_pos = event.pos
 
-            # 패닝 종료
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 2:
                     panning = False
 
-            # 패닝 드래그 중 이동
             elif event.type == pygame.MOUSEMOTION:
                 if panning:
                     mx, my = event.pos
@@ -608,12 +595,15 @@ def run_simulation():
                     camera_y += dy
                     pan_start_pos = (mx, my)
 
-        if frame_count % SPAWN_INTERVAL == 0:
-            for sx, sy in spawner_coords:
-                for _ in range(SPAWN_PER_INTERVAL[0]):
-                    substances.append(Substance(sx, sy, "glucose"))
-                for _ in range(SPAWN_PER_INTERVAL[1]):
-                    substances.append(Substance(sx, sy, "sodium"))
+        # 포도당 스폰 확률 적용
+        for sx, sy in glucose_spawner_coords:
+            if random.random() < GLUCOSE_SPAWN_PROBABILITY:
+                substances.append(Substance(sx, sy, "glucose"))
+
+        # 소금 스폰 확률 적용
+        for sx, sy in sodium_spawner_coords:
+            if random.random() < SODIUM_SPAWN_PROBABILITY:
+                substances.append(Substance(sx, sy, "sodium"))
 
         substance_grid = [[[] for _ in range(ROWS)] for _ in range(COLS)]
         for sub in substances:
@@ -621,7 +611,7 @@ def run_simulation():
 
         future_positions = []
         for sub in substances:
-            if grid[sub.x][sub.y] == 3:
+            if grid[sub.x][sub.y] == 4:
                 continue
             nx, ny, _ = move_substance(
                 sub,
@@ -636,7 +626,7 @@ def run_simulation():
         for sub, nx, ny in future_positions:
             if not in_bounds(nx, ny):
                 continue
-            if grid[nx][ny] == 3:
+            if grid[nx][ny] == 4:
                 continue
             sub.x = nx
             sub.y = ny
