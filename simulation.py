@@ -453,16 +453,33 @@ def move_substance(
 
             if in_bounds(tx, ty):
                 if sub.sub_type == "sodium":
+                    moved_glucose_count = 0
+                    max_glucose_to_pull = 2  # 끌고 갈 최대 포도당 개수 설정 (1 또는 2)
+
                     for dx, dy in DIRECTIONS_4:
                         check_x = nx + dx
                         check_y = ny + dy
                         if in_bounds(check_x, check_y):
-                            for other_sub in substance_grid[check_x][check_y]:
+                            # 해당 칸에 있는 포도당들을 확인
+                            for other_sub in list(substance_grid[check_x][check_y]):
                                 if other_sub.sub_type == "glucose":
+                                    # 포도당 위치를 펌프 통과 후 위치(tx, ty)로 변경
                                     other_sub.x = tx
                                     other_sub.y = ty
-                                    break
-                return tx, ty, True
+
+                                    # (참고) substance_grid 관리 방식에 따라 아래처럼 리스트 재배치가 필요할 수 있습니다.
+                                    # substance_grid[check_x][check_y].remove(other_sub)
+                                    # substance_grid[tx][ty].append(other_sub)
+
+                                    moved_glucose_count += 1
+
+                                    # 설정한 개수(예: 2개)만큼 채웠다면 탐색 종료
+                                    if moved_glucose_count >= max_glucose_to_pull:
+                                        break
+                            if moved_glucose_count >= max_glucose_to_pull:
+                                break
+
+                    return tx, ty, True
 
         x, y = nx, ny
         sub.x, sub.y = x, y
