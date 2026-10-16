@@ -45,11 +45,11 @@ DIRECTION_MAP = {
 }
 
 DEFAULT_ACTIVE_PUMP_DIRECTION = "right"
-CELL_PASS_PROBABILITY = 0.2
+CELL_PASS_PROBABILITY = 0.4
 
 # 생성기 확률 설정 (Spawner Probability Constants)
-SODIUM_SPAWN_PROBABILITY = 0.1
-GLUCOSE_SPAWN_PROBABILITY = 0.1
+SODIUM_SPAWN_PROBABILITY = 0.3
+GLUCOSE_SPAWN_PROBABILITY = 0.01
 
 
 # =========================================================
@@ -405,9 +405,8 @@ def move_substance(
         ny = y + dy
 
         if in_bounds(nx, ny):
-            count = sum(
-                1 for other in substance_grid[nx][ny] if other.sub_type == sub.sub_type
-            )
+            # count = sum(1 for other in substance_grid[nx][ny] if other.sub_type == sub.sub_type) # 같은 종류의 입자만 카운트 할 경우
+            count = len(substance_grid[nx][ny])
             neighbor_counts[(dx, dy)] = count
             total_neighbors += count
         else:
